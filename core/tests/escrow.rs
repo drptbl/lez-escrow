@@ -12,6 +12,9 @@ use logos_escrow_core::{EscrowError, Instruction, Job, JobState, job_account_id,
 const PROGRAM: AccountId = AccountId::new([7; 32]);
 const BUYER: AccountId = AccountId::new([1; 32]);
 const PROVIDER: AccountId = AccountId::new([2; 32]);
+/// Where the provider is paid, and where the buyer gets the deposit back.
+const PAY_TO: AccountId = AccountId::new([3; 32]);
+const REFUND_TO: AccountId = AccountId::new([6; 32]);
 const JOB_REF: [u8; 32] = [9; 32];
 const AMOUNT: u128 = 500;
 const DEADLINE: u64 = 1_800_000_000_000;
@@ -74,6 +77,8 @@ fn open() -> Instruction {
     Instruction::Open {
         job_ref: JOB_REF,
         provider: PROVIDER,
+        pay_to: PAY_TO,
+        refund_to: REFUND_TO,
         amount: AMOUNT,
         deadline: DEADLINE,
     }
@@ -100,6 +105,8 @@ fn open_locks_the_deposit_in_the_job_account_until_the_deadline() {
         Job {
             buyer: BUYER,
             provider: PROVIDER,
+            pay_to: PAY_TO,
+            refund_to: REFUND_TO,
             amount: AMOUNT,
             deadline: DEADLINE,
             result: None,
@@ -138,12 +145,16 @@ fn open_refuses_terms_that_cannot_settle() {
     let zero = Instruction::Open {
         job_ref: JOB_REF,
         provider: PROVIDER,
+        pay_to: PAY_TO,
+        refund_to: REFUND_TO,
         amount: 0,
         deadline: DEADLINE,
     };
     let self_dealing = Instruction::Open {
         job_ref: JOB_REF,
         provider: BUYER,
+        pay_to: PAY_TO,
+        refund_to: REFUND_TO,
         amount: AMOUNT,
         deadline: DEADLINE,
     };
@@ -187,6 +198,8 @@ fn deliver_records_the_result_hash_before_the_deadline() {
         Job {
             buyer: BUYER,
             provider: PROVIDER,
+            pay_to: PAY_TO,
+            refund_to: REFUND_TO,
             amount: AMOUNT,
             deadline: DEADLINE,
             result: Some(RESULT),
@@ -250,9 +263,13 @@ fn payout(to: AccountId) -> ChainedCall {
 
 #[test]
 fn the_provider_claims_a_delivered_job() {
-    let output = plan_with(vec![signer(PROVIDER), other(job())], &claim()).expect("claim plans");
+    let output = plan_with(
+        vec![signer(PROVIDER), other(job()), other(PAY_TO)],
+        &claim(),
+    )
+    .expect("claim plans");
 
-    assert_eq!(output.chained_calls, vec![payout(PROVIDER)]);
+    assert_eq!(output.chained_calls, vec![payout(PAY_TO)]);
     assert_eq!(output.timestamp_validity_window.end(), None);
 
     let record = apply_to(&output, &delivered()).expect("claim applies to a delivered job");
@@ -264,11 +281,15 @@ fn the_provider_claims_a_delivered_job() {
 #[test]
 fn only_the_named_provider_can_claim() {
     assert_eq!(
-        plan_with(vec![other(PROVIDER), other(job())], &claim()).map(|_| ()),
+        plan_with(vec![other(PROVIDER), other(job()), other(PAY_TO)], &claim()).map(|_| ()),
         Err(EscrowError::Unauthorized)
     );
     let stranger = AccountId::new([5; 32]);
-    let output = plan_with(vec![signer(stranger), other(job())], &claim()).expect("plans");
+    let output = plan_with(
+        vec![signer(stranger), other(job()), other(PAY_TO)],
+        &claim(),
+    )
+    .expect("plans");
     assert_eq!(
         apply_to(&output, &delivered()),
         Err(EscrowError::WrongParty)
@@ -282,7 +303,8 @@ fn claim_pays_exactly_the_locked_amount() {
         job_ref: JOB_REF,
         amount: AMOUNT + 1,
     };
-    let output = plan_with(vec![signer(PROVIDER), other(job())], &more).expect("plans");
+    let output =
+        plan_with(vec![signer(PROVIDER), other(job()), other(PAY_TO)], &more).expect("plans");
     assert_eq!(
         apply_to(&output, &delivered()),
         Err(EscrowError::WrongAmount)
@@ -291,7 +313,11 @@ fn claim_pays_exactly_the_locked_amount() {
 
 #[test]
 fn claim_needs_a_delivered_job() {
-    let output = plan_with(vec![signer(PROVIDER), other(job())], &claim()).expect("plans");
+    let output = plan_with(
+        vec![signer(PROVIDER), other(job()), other(PAY_TO)],
+        &claim(),
+    )
+    .expect("plans");
     let claimed = apply_to(&output, &delivered()).expect("first claim applies");
     assert_eq!(apply_to(&output, &opened()), Err(EscrowError::WrongState));
     assert_eq!(apply_to(&output, &claimed), Err(EscrowError::WrongState));
@@ -305,14 +331,14 @@ fn release() -> Instruction {
 }
 
 fn release_accounts() -> Vec<AccountMeta> {
-    vec![signer(BUYER), other(job()), other(PROVIDER)]
+    vec![signer(BUYER), other(job()), other(PAY_TO)]
 }
 
 #[test]
-fn the_buyer_can_release_an_open_or_delivered_job_to_the_provider() {
+fn the_buyer_can_release_an_open_or_delivered_job_to_the_pay_to() {
     let output = plan_with(release_accounts(), &release()).expect("release plans");
 
-    assert_eq!(output.chained_calls, vec![payout(PROVIDER)]);
+    assert_eq!(output.chained_calls, vec![payout(PAY_TO)]);
     assert_eq!(output.timestamp_validity_window.start(), None);
     assert_eq!(output.timestamp_validity_window.end(), None);
 
@@ -327,7 +353,7 @@ fn the_buyer_can_release_an_open_or_delivered_job_to_the_provider() {
 
 #[test]
 fn release_needs_the_buyer_signature() {
-    let unsigned = vec![other(BUYER), other(job()), other(PROVIDER)];
+    let unsigned = vec![other(BUYER), other(job()), other(PAY_TO)];
     assert_eq!(
         plan_with(unsigned, &release()).map(|_| ()),
         Err(EscrowError::Unauthorized)
@@ -335,7 +361,7 @@ fn release_needs_the_buyer_signature() {
 }
 
 #[test]
-fn release_pays_only_the_named_provider_and_the_locked_amount() {
+fn release_pays_only_the_jobs_pay_to_and_the_locked_amount() {
     let stranger = AccountId::new([5; 32]);
     let elsewhere = plan_with(
         vec![signer(BUYER), other(job()), other(stranger)],
@@ -372,9 +398,13 @@ fn refund() -> Instruction {
 
 #[test]
 fn the_buyer_takes_back_an_undelivered_job_from_the_deadline_on() {
-    let output = plan_with(vec![signer(BUYER), other(job())], &refund()).expect("refund plans");
+    let output = plan_with(
+        vec![signer(BUYER), other(job()), other(REFUND_TO)],
+        &refund(),
+    )
+    .expect("refund plans");
 
-    assert_eq!(output.chained_calls, vec![payout(BUYER)]);
+    assert_eq!(output.chained_calls, vec![payout(REFUND_TO)]);
     assert_eq!(output.timestamp_validity_window.start(), Some(DEADLINE));
     assert_eq!(output.timestamp_validity_window.end(), None);
 
@@ -387,7 +417,11 @@ fn the_buyer_takes_back_an_undelivered_job_from_the_deadline_on() {
 #[test]
 fn refund_needs_the_buyer_signature() {
     assert_eq!(
-        plan_with(vec![other(BUYER), other(job())], &refund()).map(|_| ()),
+        plan_with(
+            vec![other(BUYER), other(job()), other(REFUND_TO)],
+            &refund()
+        )
+        .map(|_| ()),
         Err(EscrowError::Unauthorized)
     );
 }
@@ -399,7 +433,8 @@ fn refund_must_quote_the_job_deadline_and_amount() {
         amount: AMOUNT,
         deadline: DEADLINE - 1,
     };
-    let output = plan_with(vec![signer(BUYER), other(job())], &early).expect("plans");
+    let output =
+        plan_with(vec![signer(BUYER), other(job()), other(REFUND_TO)], &early).expect("plans");
     assert_eq!(
         apply_to(&output, &opened()),
         Err(EscrowError::WrongDeadline)
@@ -410,13 +445,18 @@ fn refund_must_quote_the_job_deadline_and_amount() {
         amount: AMOUNT + 1,
         deadline: DEADLINE,
     };
-    let output = plan_with(vec![signer(BUYER), other(job())], &more).expect("plans");
+    let output =
+        plan_with(vec![signer(BUYER), other(job()), other(REFUND_TO)], &more).expect("plans");
     assert_eq!(apply_to(&output, &opened()), Err(EscrowError::WrongAmount));
 }
 
 #[test]
 fn a_delivered_job_cannot_be_refunded() {
-    let output = plan_with(vec![signer(BUYER), other(job())], &refund()).expect("plans");
+    let output = plan_with(
+        vec![signer(BUYER), other(job()), other(REFUND_TO)],
+        &refund(),
+    )
+    .expect("plans");
     assert_eq!(
         apply_to(&output, &delivered()),
         Err(EscrowError::WrongState)
@@ -464,12 +504,22 @@ fn the_job_account_and_instruction_layout_are_stable() {
 fn every_payout_needs_the_job_account_of_the_buyer_and_job_ref() {
     let someone_elses = job_account_id(&PROGRAM, &PROVIDER, &JOB_REF);
     let calls = [
-        (vec![signer(PROVIDER), other(someone_elses)], claim()),
         (
-            vec![signer(BUYER), other(someone_elses), other(PROVIDER)],
+            vec![signer(PROVIDER), other(someone_elses), other(PAY_TO)],
+            claim(),
+        ),
+        (
+            vec![signer(BUYER), other(someone_elses), other(PAY_TO)],
             release(),
         ),
-        (vec![signer(BUYER), other(someone_elses)], refund()),
+        (
+            vec![signer(BUYER), other(someone_elses), other(REFUND_TO)],
+            refund(),
+        ),
+        (
+            vec![signer(PROVIDER), other(someone_elses), other(REFUND_TO)],
+            give_back(),
+        ),
     ];
     for (accounts, instruction) in calls {
         assert_eq!(
@@ -501,20 +551,21 @@ fn a_call_from_another_program_is_refused() {
 
 fn give_back() -> Instruction {
     Instruction::Return {
+        buyer: BUYER,
         job_ref: JOB_REF,
         amount: AMOUNT,
     }
 }
 
 fn return_accounts() -> Vec<AccountMeta> {
-    vec![signer(PROVIDER), other(job()), other(BUYER)]
+    vec![signer(PROVIDER), other(job()), other(REFUND_TO)]
 }
 
 #[test]
-fn the_provider_can_return_an_open_job_to_the_buyer() {
+fn the_provider_can_return_an_open_job_to_the_refund_to() {
     let output = plan_with(return_accounts(), &give_back()).expect("return plans");
 
-    assert_eq!(output.chained_calls, vec![payout(BUYER)]);
+    assert_eq!(output.chained_calls, vec![payout(REFUND_TO)]);
     assert_eq!(output.timestamp_validity_window.start(), None);
     assert_eq!(output.timestamp_validity_window.end(), None);
 
@@ -526,7 +577,7 @@ fn the_provider_can_return_an_open_job_to_the_buyer() {
 
 #[test]
 fn only_the_named_provider_can_return_a_job() {
-    let unsigned = vec![other(PROVIDER), other(job()), other(BUYER)];
+    let unsigned = vec![other(PROVIDER), other(job()), other(REFUND_TO)];
     assert_eq!(
         plan_with(unsigned, &give_back()).map(|_| ()),
         Err(EscrowError::Unauthorized)
@@ -534,7 +585,7 @@ fn only_the_named_provider_can_return_a_job() {
 
     let stranger = AccountId::new([5; 32]);
     let output = plan_with(
-        vec![signer(stranger), other(job()), other(BUYER)],
+        vec![signer(stranger), other(job()), other(REFUND_TO)],
         &give_back(),
     )
     .expect("plans");
@@ -544,6 +595,7 @@ fn only_the_named_provider_can_return_a_job() {
 #[test]
 fn return_gives_back_exactly_the_locked_amount_of_an_open_job() {
     let more = Instruction::Return {
+        buyer: BUYER,
         job_ref: JOB_REF,
         amount: AMOUNT + 1,
     };
@@ -560,14 +612,63 @@ fn return_gives_back_exactly_the_locked_amount_of_an_open_job() {
 }
 
 #[test]
-fn return_pays_only_the_buyer_the_job_account_belongs_to() {
+fn every_payout_goes_only_to_the_jobs_payout_address() {
     let stranger = AccountId::new([5; 32]);
-    assert_eq!(
-        plan_with(
+    let calls = [
+        (
             vec![signer(PROVIDER), other(job()), other(stranger)],
-            &give_back()
-        )
-        .map(|_| ()),
-        Err(EscrowError::WrongJobAccount)
-    );
+            claim(),
+            delivered(),
+        ),
+        (
+            vec![signer(BUYER), other(job()), other(stranger)],
+            release(),
+            opened(),
+        ),
+        (
+            vec![signer(BUYER), other(job()), other(stranger)],
+            refund(),
+            opened(),
+        ),
+        (
+            vec![signer(PROVIDER), other(job()), other(stranger)],
+            give_back(),
+            opened(),
+        ),
+    ];
+    for (accounts, instruction, record) in calls {
+        let output = plan_with(accounts, &instruction).expect("plans");
+        assert_eq!(
+            apply_to(&output, &record),
+            Err(EscrowError::WrongParty),
+            "{instruction:?}"
+        );
+    }
+}
+
+#[test]
+fn open_refuses_the_job_account_as_a_payout_address() {
+    let accounts = || vec![signer(BUYER), other(job())];
+    let pays_itself = Instruction::Open {
+        job_ref: JOB_REF,
+        provider: PROVIDER,
+        pay_to: job(),
+        refund_to: REFUND_TO,
+        amount: AMOUNT,
+        deadline: DEADLINE,
+    };
+    let refunds_itself = Instruction::Open {
+        job_ref: JOB_REF,
+        provider: PROVIDER,
+        pay_to: PAY_TO,
+        refund_to: job(),
+        amount: AMOUNT,
+        deadline: DEADLINE,
+    };
+    for instruction in [pays_itself, refunds_itself] {
+        assert_eq!(
+            plan_with(accounts(), &instruction).map(|_| ()),
+            Err(EscrowError::InvalidTerms)
+        );
+    }
 }

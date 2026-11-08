@@ -45,39 +45,49 @@ pub fn job_account_id(program: &AccountId, buyer: &AccountId, job_ref: &Hash32) 
 }
 
 /// The escrow program's instructions, borsh-encoded as the transaction's instruction data.
+///
+/// Payouts go to the addresses fixed at `Open`, not to the signer, so a payee can be a fresh
+/// private account that only the payout ever touches.
 #[derive(Debug, Clone, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub enum Instruction {
-    /// Locks `amount` from the buyer for `provider` until `deadline`.
+    /// Locks `amount` from the buyer for `provider` until `deadline`. The provider is paid to
+    /// `pay_to` and the buyer gets the deposit back to `refund_to`.
     /// Accounts: `[buyer (signs), job]`.
     Open {
         job_ref: Hash32,
         provider: AccountId,
+        pay_to: AccountId,
+        refund_to: AccountId,
         amount: Balance,
         deadline: Timestamp,
     },
     /// Records the provider's result hash. Only before the job's `deadline`.
     /// Accounts: `[provider (signs), job]`.
     Deliver { result: Hash32, deadline: Timestamp },
-    /// Pays a delivered job's `amount` to its provider.
-    /// Accounts: `[provider (signs), job]`.
+    /// Pays a delivered job's `amount` to its `pay_to`.
+    /// Accounts: `[provider (signs), job, pay_to]`.
     Claim {
         buyer: AccountId,
         job_ref: Hash32,
         amount: Balance,
     },
-    /// Pays an open or delivered job's `amount` to its provider, at any time.
-    /// Accounts: `[buyer (signs), job, provider]`.
+    /// Pays an open or delivered job's `amount` to its `pay_to`, at any time.
+    /// Accounts: `[buyer (signs), job, pay_to]`.
     Release { job_ref: Hash32, amount: Balance },
-    /// Returns an undelivered job's `amount` to the buyer. Only from the job's `deadline` on.
-    /// Accounts: `[buyer (signs), job]`.
+    /// Returns an undelivered job's `amount` to its `refund_to`. Only from the job's `deadline`
+    /// on. Accounts: `[buyer (signs), job, refund_to]`.
     Refund {
         job_ref: Hash32,
         amount: Balance,
         deadline: Timestamp,
     },
-    /// The provider gives an open job's `amount` back to the buyer, at any time.
-    /// Accounts: `[provider (signs), job, buyer]`.
-    Return { job_ref: Hash32, amount: Balance },
+    /// The provider gives an open job's `amount` back to its `refund_to`, at any time.
+    /// Accounts: `[provider (signs), job, refund_to]`.
+    Return {
+        buyer: AccountId,
+        job_ref: Hash32,
+        amount: Balance,
+    },
 }
 
 /// Where a job is in its life.
@@ -95,6 +105,10 @@ pub enum JobState {
 pub struct Job {
     pub buyer: AccountId,
     pub provider: AccountId,
+    /// Where `Claim` and `Release` pay.
+    pub pay_to: AccountId,
+    /// Where `Refund` and `Return` pay.
+    pub refund_to: AccountId,
     pub amount: Balance,
     /// Milliseconds since the Unix epoch.
     pub deadline: Timestamp,
@@ -114,9 +128,11 @@ pub enum EscrowError {
     WrongJobAccount,
     /// `Open` found a job record already in the job account.
     JobExists,
-    /// `Open` with a zero amount, or with the buyer as its own provider.
+    /// `Open` with a zero amount, the buyer as its own provider, or the job account as a payout
+    /// address.
     InvalidTerms,
-    /// The signer is not the job's buyer or provider, as this instruction requires.
+    /// The signer is not the job's buyer or provider as this instruction requires, or the payee
+    /// is not the job's payout address.
     WrongParty,
     /// The instruction's `deadline` is not the job's.
     WrongDeadline,
@@ -162,18 +178,21 @@ enum Effect {
     },
     Claim {
         provider: AccountId,
+        payee: AccountId,
         amount: Balance,
     },
     Release {
-        provider: AccountId,
+        payee: AccountId,
         amount: Balance,
     },
     Refund {
+        payee: AccountId,
         amount: Balance,
         deadline: Timestamp,
     },
     Return {
         provider: AccountId,
+        payee: AccountId,
         amount: Balance,
     },
 }
@@ -190,13 +209,19 @@ pub fn plan(input: &PlanInput) -> Result<Plan, EscrowError> {
         Instruction::Open {
             job_ref,
             provider,
+            pay_to,
+            refund_to,
             amount,
             deadline,
         } => {
             let [buyer, job] = accounts(input)?;
             signed(buyer)?;
             job_account(input, job, buyer.account_id, &job_ref)?;
-            if amount == 0 || provider == buyer.account_id {
+            if amount == 0
+                || provider == buyer.account_id
+                || pay_to == job.account_id
+                || refund_to == job.account_id
+            {
                 return Err(EscrowError::InvalidTerms);
             }
             plan.effect(
@@ -204,6 +229,8 @@ pub fn plan(input: &PlanInput) -> Result<Plan, EscrowError> {
                 &Effect::Open(Job {
                     buyer: buyer.account_id,
                     provider,
+                    pay_to,
+                    refund_to,
                     amount,
                     deadline,
                     result: None,
@@ -232,38 +259,39 @@ pub fn plan(input: &PlanInput) -> Result<Plan, EscrowError> {
             job_ref,
             amount,
         } => {
-            let [provider, job] = accounts(input)?;
+            let [provider, job, payee] = accounts(input)?;
             signed(provider)?;
             let seed = job_account(input, job, buyer, &job_ref)?;
             plan.effect(
                 job,
                 &Effect::Claim {
                     provider: provider.account_id,
+                    payee: payee.account_id,
                     amount,
                 },
             );
             plan.call(custody_transfer(
                 job.account_id,
                 seed,
-                provider.account_id,
+                payee.account_id,
                 amount,
             ));
         }
         Instruction::Release { job_ref, amount } => {
-            let [buyer, job, provider] = accounts(input)?;
+            let [buyer, job, payee] = accounts(input)?;
             signed(buyer)?;
             let seed = job_account(input, job, buyer.account_id, &job_ref)?;
             plan.effect(
                 job,
                 &Effect::Release {
-                    provider: provider.account_id,
+                    payee: payee.account_id,
                     amount,
                 },
             );
             plan.call(custody_transfer(
                 job.account_id,
                 seed,
-                provider.account_id,
+                payee.account_id,
                 amount,
             ));
         }
@@ -272,33 +300,45 @@ pub fn plan(input: &PlanInput) -> Result<Plan, EscrowError> {
             amount,
             deadline,
         } => {
-            let [buyer, job] = accounts(input)?;
+            let [buyer, job, payee] = accounts(input)?;
             signed(buyer)?;
             let seed = job_account(input, job, buyer.account_id, &job_ref)?;
-            plan.effect(job, &Effect::Refund { amount, deadline });
+            plan.effect(
+                job,
+                &Effect::Refund {
+                    payee: payee.account_id,
+                    amount,
+                    deadline,
+                },
+            );
             plan.call(custody_transfer(
                 job.account_id,
                 seed,
-                buyer.account_id,
+                payee.account_id,
                 amount,
             ));
             plan.timestamp_window(deadline..);
         }
-        Instruction::Return { job_ref, amount } => {
-            let [provider, job, buyer] = accounts(input)?;
+        Instruction::Return {
+            buyer,
+            job_ref,
+            amount,
+        } => {
+            let [provider, job, payee] = accounts(input)?;
             signed(provider)?;
-            let seed = job_account(input, job, buyer.account_id, &job_ref)?;
+            let seed = job_account(input, job, buyer, &job_ref)?;
             plan.effect(
                 job,
                 &Effect::Return {
                     provider: provider.account_id,
+                    payee: payee.account_id,
                     amount,
                 },
             );
             plan.call(custody_transfer(
                 job.account_id,
                 seed,
-                buyer.account_id,
+                payee.account_id,
                 amount,
             ));
         }
@@ -336,9 +376,13 @@ pub fn apply(input: &ApplyInput) -> Result<ShardData, EscrowError> {
             job.state = JobState::Delivered;
             job
         }
-        Effect::Claim { provider, amount } => {
+        Effect::Claim {
+            provider,
+            payee,
+            amount,
+        } => {
             let mut job = load(&input.pre_data)?;
-            if job.provider != provider {
+            if job.provider != provider || job.pay_to != payee {
                 return Err(EscrowError::WrongParty);
             }
             if job.amount != amount {
@@ -350,9 +394,9 @@ pub fn apply(input: &ApplyInput) -> Result<ShardData, EscrowError> {
             job.state = JobState::Claimed;
             job
         }
-        Effect::Release { provider, amount } => {
+        Effect::Release { payee, amount } => {
             let mut job = load(&input.pre_data)?;
-            if job.provider != provider {
+            if job.pay_to != payee {
                 return Err(EscrowError::WrongParty);
             }
             if job.amount != amount {
@@ -364,8 +408,15 @@ pub fn apply(input: &ApplyInput) -> Result<ShardData, EscrowError> {
             job.state = JobState::Released;
             job
         }
-        Effect::Refund { amount, deadline } => {
+        Effect::Refund {
+            payee,
+            amount,
+            deadline,
+        } => {
             let mut job = load(&input.pre_data)?;
+            if job.refund_to != payee {
+                return Err(EscrowError::WrongParty);
+            }
             if job.amount != amount {
                 return Err(EscrowError::WrongAmount);
             }
@@ -378,9 +429,13 @@ pub fn apply(input: &ApplyInput) -> Result<ShardData, EscrowError> {
             job.state = JobState::Refunded;
             job
         }
-        Effect::Return { provider, amount } => {
+        Effect::Return {
+            provider,
+            payee,
+            amount,
+        } => {
             let mut job = load(&input.pre_data)?;
-            if job.provider != provider {
+            if job.provider != provider || job.refund_to != payee {
                 return Err(EscrowError::WrongParty);
             }
             if job.amount != amount {
