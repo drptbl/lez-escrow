@@ -1,4 +1,4 @@
-# lez-escrow
+# logos-escrow
 
 Job escrow for the Logos Execution Zone. A buyer locks a payment for one job, the provider gets it when it delivers, and the buyer gets it back when the provider doesn't deliver by the deadline.
 
@@ -52,7 +52,7 @@ seed = SHA-256("/lez-escrow/v1/JobSeed/000000000" || buyer || job_ref)
 job  = SHA-256("/LEE/v0.2/AccountId/PDA/" || 8 zero bytes || program_id || seed)
 ```
 
-`buyer`, `job_ref` and `program_id` are 32 bytes each, and both prefixes are 32 bytes. Deriving from the buyer too means nobody who learns a `job_ref` can open that job first. In the services protocol `job_ref` would be the SHA-256 of the accepted quote.
+`buyer`, `job_ref` and `program_id` are 32 bytes each, and both prefixes are 32 bytes. The seed domain keeps the project's former name, lez-escrow, so callers' derivation code didn't change with the rename. Deriving from the buyer too means nobody who learns a `job_ref` can open that job first. In the services protocol `job_ref` would be the SHA-256 of the accepted quote.
 
 `core/tests/escrow.rs` (`the_job_account_and_instruction_layout_are_stable`) pins these against literals computed with Python's `hashlib`, so you can check your own derivation against it.
 
@@ -162,11 +162,11 @@ make test
 `cli/` is a small client on the same wallet code `lez_core` uses:
 
 ```bash
-export LEE_WALLET_HOME_DIR=~/.lez-escrow/wallet LEZ_ESCROW_PROGRAM=<program id>
-cargo run -p lez_escrow_cli -- open --buyer <id> --job-ref <hex> --provider <id> --amount 1000000 --in-secs 600
-cargo run -p lez_escrow_cli -- deliver --buyer <id> --job-ref <hex> --result <hex>
-cargo run -p lez_escrow_cli -- claim --buyer <id> --job-ref <hex>
-cargo run -p lez_escrow_cli -- show --buyer <id> --job-ref <hex>
+export LEE_WALLET_HOME_DIR=~/.lez-escrow/wallet LOGOS_ESCROW_PROGRAM=<program id>
+cargo run -p logos_escrow_cli -- open --buyer <id> --job-ref <hex> --provider <id> --amount 1000000 --in-secs 600
+cargo run -p logos_escrow_cli -- deliver --buyer <id> --job-ref <hex> --result <hex>
+cargo run -p logos_escrow_cli -- claim --buyer <id> --job-ref <hex>
+cargo run -p logos_escrow_cli -- show --buyer <id> --job-ref <hex>
 ```
 
 ## License

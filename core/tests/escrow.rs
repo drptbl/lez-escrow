@@ -7,7 +7,7 @@ use lee_core::{
     native_token::{Instruction as NativeInstruction, NATIVE_TOKEN_PROGRAM_ID},
     program::{AccountMeta, ApplyInput, ChainedCall, PlanInput, PlanOutput, ShardEffect},
 };
-use lez_escrow_core::{EscrowError, Instruction, Job, JobState, job_account_id, plan};
+use logos_escrow_core::{EscrowError, Instruction, Job, JobState, job_account_id, plan};
 
 const PROGRAM: AccountId = AccountId::new([7; 32]);
 const BUYER: AccountId = AccountId::new([1; 32]);
@@ -51,7 +51,7 @@ fn apply_to(output: &PlanOutput, pre: &[u8]) -> Result<ShardData, EscrowError> {
 
 fn apply_effect(effect: &ShardEffect, pre: &[u8]) -> Result<ShardData, EscrowError> {
     assert_eq!(effect.selector, ProgramShardSelector::new(job(), PROGRAM));
-    lez_escrow_core::apply(&ApplyInput {
+    logos_escrow_core::apply(&ApplyInput {
         self_account_id: PROGRAM,
         selector: effect.selector,
         pre_data: ShardData::try_from(pre.to_vec()).expect("fits"),
@@ -245,7 +245,7 @@ fn claim() -> Instruction {
 /// A payout from the job account, authorized by the job account's PDA seed.
 fn payout(to: AccountId) -> ChainedCall {
     native_transfer(job(), to, AMOUNT)
-        .with_pda_seeds(vec![lez_escrow_core::job_seed(&BUYER, &JOB_REF)])
+        .with_pda_seeds(vec![logos_escrow_core::job_seed(&BUYER, &JOB_REF)])
 }
 
 #[test]
@@ -447,7 +447,7 @@ fn malformed_calls_are_refused() {
 fn the_job_account_and_instruction_layout_are_stable() {
     let hex = |bytes: &[u8]| bytes.iter().map(|b| format!("{b:02x}")).collect::<String>();
     assert_eq!(
-        hex(lez_escrow_core::job_seed(&BUYER, &JOB_REF).as_bytes()),
+        hex(logos_escrow_core::job_seed(&BUYER, &JOB_REF).as_bytes()),
         "82f93aaaff0ed39ce06c69791bd64f06a3c4e8d97e1e44f2857a71bfbca0a504"
     );
     assert_eq!(

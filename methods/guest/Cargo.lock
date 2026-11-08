@@ -1106,25 +1106,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "lez_escrow_core"
-version = "0.1.0"
-dependencies = [
- "borsh",
- "lee_core",
- "risc0-zkvm",
-]
-
-[[package]]
-name = "lez_escrow_guest"
-version = "0.1.0"
-dependencies = [
- "borsh",
- "lee_core",
- "lez_escrow_core",
- "risc0-zkvm",
-]
-
-[[package]]
 name = "libc"
 version = "0.2.191"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1141,6 +1122,25 @@ name = "log"
 version = "0.4.35"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5d15f86d12da44cd8d4ec3c73984537eb7f4cadcb9776a575a0a8a05ca11005c"
+
+[[package]]
+name = "logos_escrow_core"
+version = "0.1.0"
+dependencies = [
+ "borsh",
+ "lee_core",
+ "risc0-zkvm",
+]
+
+[[package]]
+name = "logos_escrow_guest"
+version = "0.1.0"
+dependencies = [
+ "borsh",
+ "lee_core",
+ "logos_escrow_core",
+ "risc0-zkvm",
+]
 
 [[package]]
 name = "malloc_buf"

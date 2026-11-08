@@ -1,16 +1,16 @@
 [package]
-name = "lez_escrow_cli"
+name = "logos_escrow_cli"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 publish = false
 
 [[bin]]
-name = "lez-escrow"
+name = "logos-escrow"
 path = "src/main.rs"
 
 [dependencies]
-lez_escrow_core = { path = "../core" }
+logos_escrow_core = { path = "../core" }
 lee_core.workspace = true
 borsh.workspace = true
 # The wallet `lez_core` wraps, so calls take the same path logos-mcp's will.

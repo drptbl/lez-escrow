@@ -1,5 +1,5 @@
 [package]
-name = "lez_escrow_guest"
+name = "logos_escrow_guest"
 version = "0.1.0"
 edition = "2024"
 license = "MIT OR Apache-2.0"
@@ -13,11 +13,11 @@ debug = 0
 strip = "symbols"
 
 [[bin]]
-name = "lez_escrow"
-path = "src/bin/lez_escrow.rs"
+name = "logos_escrow"
+path = "src/bin/logos_escrow.rs"
 
 [dependencies]
-lez_escrow_core = { path = "../../core" }
+logos_escrow_core = { path = "../../core" }
 lee_core = { git = "https://github.com/logos-blockchain/logos-execution-zone.git", tag = "v0.3.1" }
 borsh = { version = "1.5.7", features = ["derive"] }
 risc0-zkvm = { version = "=3.0.5", default-features = false, features = ["std"] }

@@ -8,14 +8,14 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use anyhow::{Context as _, Result, bail};
 use clap::{Parser, Subcommand};
 use lee_core::account::{AccountId, Balance};
-use lez_escrow_core::{Hash32, Instruction, Job, job_account_id};
+use logos_escrow_core::{Hash32, Instruction, Job, job_account_id};
 use wallet::{AccountIdentity, AccountMention, WalletCore};
 
 #[derive(Parser)]
-#[command(about = "Drive the lez-escrow program from a LEZ wallet")]
+#[command(about = "Drive the logos-escrow program from a LEZ wallet")]
 struct Args {
     /// The escrow program's header account id (base58).
-    #[arg(long, env = "LEZ_ESCROW_PROGRAM", global = true)]
+    #[arg(long, env = "LOGOS_ESCROW_PROGRAM", global = true)]
     program: Option<AccountId>,
     /// A wallet account that pays every transaction's fee; by default the signer pays.
     #[arg(long, global = true)]
@@ -79,7 +79,7 @@ async fn main() -> Result<()> {
     let args = Args::parse();
     let program = args
         .program
-        .context("set --program or LEZ_ESCROW_PROGRAM")?;
+        .context("set --program or LOGOS_ESCROW_PROGRAM")?;
     let wallet = WalletCore::from_env().context("open the wallet at LEE_WALLET_HOME_DIR")?;
     let escrow = Escrow {
         wallet,

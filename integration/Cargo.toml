@@ -1,5 +1,5 @@
 [package]
-name = "lez_escrow_integration"
+name = "logos_escrow_integration"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -9,5 +9,5 @@ publish = false
 [dev-dependencies]
 lee = { workspace = true, features = ["test-utils"] }
 lee_core.workspace = true
-lez_escrow_core = { path = "../core" }
+logos_escrow_core = { path = "../core" }
 borsh.workspace = true

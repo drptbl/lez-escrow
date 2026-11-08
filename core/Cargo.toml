@@ -1,5 +1,5 @@
 [package]
-name = "lez_escrow_core"
+name = "logos_escrow_core"
 version.workspace = true
 edition.workspace = true
 license.workspace = true

@@ -15,11 +15,11 @@ use lee_core::{
     account::{AccountId, Balance, ProgramShardSelector},
     native_token::{Instruction as NativeInstruction, NATIVE_TOKEN_PROGRAM_ID, TransferError},
 };
-use lez_escrow_core::{Instruction, Job, JobState, job_account_id};
+use logos_escrow_core::{Instruction, Job, JobState, job_account_id};
 
 const GUEST: &str = concat!(
     env!("CARGO_MANIFEST_DIR"),
-    "/../methods/guest/target/riscv32im-risc0-zkvm-elf/docker/lez_escrow.bin"
+    "/../methods/guest/target/riscv32im-risc0-zkvm-elf/docker/logos_escrow.bin"
 );
 /// Where the test deploys the escrow program; on chain this is the header account.
 const PROGRAM: AccountId = AccountId::new([0xE5; 32]);
@@ -255,7 +255,7 @@ fn a_refused_call_exits_with_its_code_and_moves_nothing() {
 
     // Claiming before delivery: the job is in the wrong state.
     assert!(refused_with(
-        lez_escrow_core::EscrowError::WrongState.code()
+        logos_escrow_core::EscrowError::WrongState.code()
     )(&chain.claim()));
     assert_eq!(chain.balance(job()), AMOUNT);
     assert_eq!(chain.balance(provider().id), START);
