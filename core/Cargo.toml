@@ -1,0 +1,10 @@
+[package]
+name = "lez_escrow_core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+lee_core.workspace = true
+borsh.workspace = true
+risc0-zkvm.workspace = true
