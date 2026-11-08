@@ -65,6 +65,8 @@ enum Command {
     Release(JobArgs),
     /// Buyer: take back an undelivered job after its deadline.
     Refund(JobArgs),
+    /// Provider: give an open job's deposit back to the buyer.
+    Return(JobArgs),
 }
 
 fn parse_hash(text: &str) -> Result<Hash32> {
@@ -163,6 +165,19 @@ async fn main() -> Result<()> {
             let accounts = vec![
                 escrow.signs(job.buyer),
                 escrow.mention(escrow.job_account(&job)),
+            ];
+            escrow.send(&job, accounts, &instruction).await?;
+        }
+        Command::Return(job) => {
+            let record = escrow.record(&job).await?;
+            let instruction = Instruction::Return {
+                job_ref: job.job_ref,
+                amount: record.amount,
+            };
+            let accounts = vec![
+                escrow.signs(record.provider),
+                escrow.mention(escrow.job_account(&job)),
+                escrow.mention(job.buyer),
             ];
             escrow.send(&job, accounts, &instruction).await?;
         }

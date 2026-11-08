@@ -498,3 +498,76 @@ fn a_call_from_another_program_is_refused() {
     };
     assert!(plan(&direct).is_ok());
 }
+
+fn give_back() -> Instruction {
+    Instruction::Return {
+        job_ref: JOB_REF,
+        amount: AMOUNT,
+    }
+}
+
+fn return_accounts() -> Vec<AccountMeta> {
+    vec![signer(PROVIDER), other(job()), other(BUYER)]
+}
+
+#[test]
+fn the_provider_can_return_an_open_job_to_the_buyer() {
+    let output = plan_with(return_accounts(), &give_back()).expect("return plans");
+
+    assert_eq!(output.chained_calls, vec![payout(BUYER)]);
+    assert_eq!(output.timestamp_validity_window.start(), None);
+    assert_eq!(output.timestamp_validity_window.end(), None);
+
+    assert_eq!(
+        decode(&apply_to(&output, &opened()).expect("applies")).state,
+        JobState::Refunded
+    );
+}
+
+#[test]
+fn only_the_named_provider_can_return_a_job() {
+    let unsigned = vec![other(PROVIDER), other(job()), other(BUYER)];
+    assert_eq!(
+        plan_with(unsigned, &give_back()).map(|_| ()),
+        Err(EscrowError::Unauthorized)
+    );
+
+    let stranger = AccountId::new([5; 32]);
+    let output = plan_with(
+        vec![signer(stranger), other(job()), other(BUYER)],
+        &give_back(),
+    )
+    .expect("plans");
+    assert_eq!(apply_to(&output, &opened()), Err(EscrowError::WrongParty));
+}
+
+#[test]
+fn return_gives_back_exactly_the_locked_amount_of_an_open_job() {
+    let more = Instruction::Return {
+        job_ref: JOB_REF,
+        amount: AMOUNT + 1,
+    };
+    let output = plan_with(return_accounts(), &more).expect("plans");
+    assert_eq!(apply_to(&output, &opened()), Err(EscrowError::WrongAmount));
+
+    let output = plan_with(return_accounts(), &give_back()).expect("plans");
+    assert_eq!(
+        apply_to(&output, &delivered()),
+        Err(EscrowError::WrongState)
+    );
+    let returned = apply_to(&output, &opened()).expect("first return applies");
+    assert_eq!(apply_to(&output, &returned), Err(EscrowError::WrongState));
+}
+
+#[test]
+fn return_pays_only_the_buyer_the_job_account_belongs_to() {
+    let stranger = AccountId::new([5; 32]);
+    assert_eq!(
+        plan_with(
+            vec![signer(PROVIDER), other(job()), other(stranger)],
+            &give_back()
+        )
+        .map(|_| ()),
+        Err(EscrowError::WrongJobAccount)
+    );
+}

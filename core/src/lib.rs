@@ -75,6 +75,9 @@ pub enum Instruction {
         amount: Balance,
         deadline: Timestamp,
     },
+    /// The provider gives an open job's `amount` back to the buyer, at any time.
+    /// Accounts: `[provider (signs), job, buyer]`.
+    Return { job_ref: Hash32, amount: Balance },
 }
 
 /// Where a job is in its life.
@@ -168,6 +171,10 @@ enum Effect {
     Refund {
         amount: Balance,
         deadline: Timestamp,
+    },
+    Return {
+        provider: AccountId,
+        amount: Balance,
     },
 }
 
@@ -277,6 +284,24 @@ pub fn plan(input: &PlanInput) -> Result<Plan, EscrowError> {
             ));
             plan.timestamp_window(deadline..);
         }
+        Instruction::Return { job_ref, amount } => {
+            let [provider, job, buyer] = accounts(input)?;
+            signed(provider)?;
+            let seed = job_account(input, job, buyer.account_id, &job_ref)?;
+            plan.effect(
+                job,
+                &Effect::Return {
+                    provider: provider.account_id,
+                    amount,
+                },
+            );
+            plan.call(custody_transfer(
+                job.account_id,
+                seed,
+                buyer.account_id,
+                amount,
+            ));
+        }
     }
     Ok(plan)
 }
@@ -346,6 +371,20 @@ pub fn apply(input: &ApplyInput) -> Result<ShardData, EscrowError> {
             }
             if job.deadline != deadline {
                 return Err(EscrowError::WrongDeadline);
+            }
+            if job.state != JobState::Open {
+                return Err(EscrowError::WrongState);
+            }
+            job.state = JobState::Refunded;
+            job
+        }
+        Effect::Return { provider, amount } => {
+            let mut job = load(&input.pre_data)?;
+            if job.provider != provider {
+                return Err(EscrowError::WrongParty);
+            }
+            if job.amount != amount {
+                return Err(EscrowError::WrongAmount);
             }
             if job.state != JobState::Open {
                 return Err(EscrowError::WrongState);

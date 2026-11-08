@@ -286,3 +286,26 @@ fn nobody_can_move_the_deposit_without_the_escrow_program() {
     ));
     assert_eq!(chain.balance(job()), AMOUNT);
 }
+
+#[test]
+fn the_provider_can_give_an_open_job_back_before_the_deadline() {
+    let mut chain = Chain::new();
+    chain.open().expect("open");
+
+    let give_back = Instruction::Return {
+        job_ref: JOB_REF,
+        amount: AMOUNT,
+    };
+    chain
+        .call(
+            &provider(),
+            &[provider().id, job(), buyer().id],
+            &give_back,
+            BEFORE,
+        )
+        .expect("return");
+    assert_eq!(chain.job().state, JobState::Refunded);
+    assert_eq!(chain.balance(job()), 0);
+    assert_eq!(chain.balance(buyer().id), START);
+    assert_eq!(chain.balance(provider().id), START);
+}

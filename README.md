@@ -31,10 +31,11 @@ Each job lives in its own job account. The account holds the locked lepta and, i
 | `Delivered` | `Deliver` | `Claimed`, `Released` |
 | `Claimed` | `Claim` | final |
 | `Released` | `Release` | final |
-| `Refunded` | `Refund` | final |
+| `Refunded` | `Refund` or `Return` | final |
 
 - The provider delivers by recording a 32-byte result hash before the deadline, for example the SHA-256 of the result it sent. The chain can't check the result itself.
 - There are no disputes. Once delivered, the provider can claim at any time and the buyer can no longer refund.
+- A provider that can't do an open job can `Return` the deposit to the buyer at any time, so the buyer doesn't wait for the deadline.
 - The buyer can release to the provider at any time before the job is final.
 - Deadlines are milliseconds since the Unix epoch, checked against the block's timestamp.
 - The record stays after the job ends, so a job reference can't be used twice.
@@ -75,6 +76,7 @@ send_generic_public_transaction(account_ids, signing_requirements, instruction, 
 | `Claim` | `[provider, job]` | provider | `Delivered` | `amount` from job to provider |
 | `Release` | `[buyer, job, provider]` | buyer | `Open` or `Delivered` | `amount` from job to provider |
 | `Refund` | `[buyer, job]` | buyer | from `deadline` on, `Open` | `amount` from job to buyer |
+| `Return` | `[provider, job, buyer]` | provider | `Open`, any time | `amount` from job to buyer |
 
 The program can't read the job record while it plans a call. So every instruction carries the values the record must match, and the call fails when they don't. Read the record first and copy `amount` and `deadline` from it.
 
@@ -89,6 +91,7 @@ Borsh: one variant byte, then the fields in order. Integers are little-endian, a
 | `2` | `Claim` | `buyer: [u8; 32]`, `job_ref: [u8; 32]`, `amount: u128` | 81 |
 | `3` | `Release` | `job_ref: [u8; 32]`, `amount: u128` | 49 |
 | `4` | `Refund` | `job_ref: [u8; 32]`, `amount: u128`, `deadline: u64` | 57 |
+| `5` | `Return` | `job_ref: [u8; 32]`, `amount: u128` | 49 |
 
 `Deliver { result: [4; 32], deadline: 1800000000000 }` encodes to:
 
