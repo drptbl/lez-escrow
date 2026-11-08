@@ -1,0 +1,13 @@
+[package]
+name = "lez_escrow_integration"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+# Runs the built guest binary through LEZ's own state machine.
+[dev-dependencies]
+lee = { workspace = true, features = ["test-utils"] }
+lee_core.workspace = true
+lez_escrow_core = { path = "../core" }
+borsh.workspace = true

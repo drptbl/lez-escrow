@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["core"]
+members = ["core", "integration"]
 exclude = ["methods/guest"]
 
 [workspace.package]
