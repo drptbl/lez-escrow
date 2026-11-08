@@ -19,6 +19,8 @@ The program id is the account the program was deployed at, not the image id. Pas
 
 The deployed binary is immutable. A fix means a new deploy at a new program id, and jobs already open finish on the old one.
 
+The source on `main` is ahead of this deploy: it also refuses calls that come from another program (error 11). LEZ `v0.3.1` carries a signer's authorization into chained calls, so the deployed program can be driven by any program its buyer or provider signs a transaction for. Only sign transactions for programs you trust until it is redeployed.
+
 ## How it works
 
 Each job lives in its own job account. The account holds the locked lepta and, in the escrow program's shard, the job record.
@@ -134,6 +136,7 @@ The program refuses a call by exiting with one of these codes. LEZ then charges 
 | 8 | `NoJob` | no record in the job account |
 | 9 | `WrongState` | the job isn't in a state this instruction takes |
 | 10 | `WrongAmount` | `amount` isn't the job's |
+| 11 | `NotDirect` | another program called the escrow. Only direct calls are taken. Not in the deployed `4gCJP2bc…` yet |
 
 LEZ itself refuses the rest, and those cost more. The transaction is still included, changes nothing and pays its whole gas limit:
 

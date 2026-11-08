@@ -479,3 +479,22 @@ fn every_payout_needs_the_job_account_of_the_buyer_and_job_ref() {
         );
     }
 }
+
+#[test]
+fn a_call_from_another_program_is_refused() {
+    // LEZ carries a signer's authorization into chained calls, so a program the buyer signs
+    // for could otherwise act on the buyer's jobs.
+    let chained = PlanInput {
+        self_account_id: PROGRAM,
+        caller_account_id: Some(AccountId::new([8; 32])),
+        accounts: vec![signer(BUYER), other(job())],
+        instruction_data: borsh::to_vec(&open()).expect("instruction serializes"),
+    };
+    assert_eq!(plan(&chained).map(|_| ()), Err(EscrowError::NotDirect));
+
+    let direct = PlanInput {
+        caller_account_id: None,
+        ..chained
+    };
+    assert!(plan(&direct).is_ok());
+}

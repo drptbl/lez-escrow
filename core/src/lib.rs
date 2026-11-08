@@ -123,6 +123,9 @@ pub enum EscrowError {
     WrongState,
     /// The instruction's `amount` is not the job's.
     WrongAmount,
+    /// Another program called the escrow. Only direct calls are taken, because LEZ carries a
+    /// signer's authorization into every chained call.
+    NotDirect,
 }
 
 impl EscrowError {
@@ -140,6 +143,7 @@ impl EscrowError {
             Self::NoJob => 8,
             Self::WrongState => 9,
             Self::WrongAmount => 10,
+            Self::NotDirect => 11,
         }
     }
 }
@@ -171,6 +175,9 @@ enum Effect {
 pub fn plan(input: &PlanInput) -> Result<Plan, EscrowError> {
     let instruction: Instruction =
         borsh::from_slice(&input.instruction_data).map_err(|_| EscrowError::InvalidInstruction)?;
+    if input.caller_account_id.is_some() {
+        return Err(EscrowError::NotDirect);
+    }
     let mut plan = Plan::new(input);
     match instruction {
         Instruction::Open {
