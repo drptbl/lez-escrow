@@ -4936,6 +4936,7 @@ dependencies = [
  "borsh",
  "clap",
  "hex",
+ "lee",
  "lee_core",
  "logos_escrow_core",
  "tokio",
