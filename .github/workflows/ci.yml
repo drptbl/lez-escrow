@@ -43,6 +43,8 @@ jobs:
           echo "$HOME/.risc0/bin" >> "$GITHUB_PATH"
           "$HOME/.risc0/bin/rzup" install cargo-risczero "$RISC0_VERSION"
           "$HOME/.risc0/bin/rzup" install r0vm "$RISC0_VERSION"
+          # risc0-build checks for this toolchain even when it builds in Docker.
+          "$HOME/.risc0/bin/rzup" install rust
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
       - name: Build the guest
         run: make build | tee build.log
