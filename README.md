@@ -9,17 +9,17 @@ Built for agent services in [logos-mcp](https://github.com/drptbl/logos-mcp), bu
 | Network | Value |
 | --- | --- |
 | Sequencer | `https://testnet.lez.logos.co/` (LEZ `v0.3.1`) |
-| Program id (header account) | `4gCJP2bc5YBCh3saEzudfTmNYZ4uZNDj8fUea4wsHrEM` |
-| Program id, hex | `369d7d27dee17ad2f9d39e067ccaf3693c29bc4d432c4d8d6cb684e2ba85a68a` |
-| Image id | `357fc2be58aaee6650f3203efe856c9f53bc2483e4f556fd4ab836f2379e1f79` |
+| Program id (header account) | `CAZ8AvrdAeZ4rQjHqhAucqSLqrMK8TFQ7Z8b2jg5Sb4G` |
+| Program id, hex | `a5e31b14f1304b129f108abb457eb389ed0f88103fa91b069208af5e9df6560d` |
+| Image id | `e8a934582fbc028affdb5bff01a511105b8fb857efc6ee3828d0768d58c150fa` |
 | Immutable | yes, checked on chain |
-| Deployed | 2026-11-08, blocks 79116 to 79128, header tx `fae91a3b02cc3a57571fa8e3503d57e4c2c79b2b9bb9dd1d1ab8f891d6ccfc6b` |
+| Deployed | 2026-11-08, blocks 79159 to 79165, header tx `6a233633731807fac3d64b93c04c7a36619ce32943807e40787d5cf4e30dedc8` |
 
 The program id is the account the program was deployed at, not the image id. Pass it as `program_id_hex` to `lez_core`.
 
 The deployed binary is immutable. A fix means a new deploy at a new program id, and jobs already open finish on the old one.
 
-The source on `main` is ahead of this deploy: it also refuses calls that come from another program (error 11). LEZ `v0.3.1` carries a signer's authorization into chained calls, so the deployed program can be driven by any program its buyer or provider signs a transaction for. Only sign transactions for programs you trust until it is redeployed.
+It replaces `4gCJP2bc5YBCh3saEzudfTmNYZ4uZNDj8fUea4wsHrEM`, which still runs but takes calls from other programs. LEZ `v0.3.1` carries a signer's authorization into chained calls, so any program a buyer or provider signs for could drive that one. Don't open new jobs there.
 
 ## How it works
 
@@ -136,7 +136,7 @@ The program refuses a call by exiting with one of these codes. LEZ then charges 
 | 8 | `NoJob` | no record in the job account |
 | 9 | `WrongState` | the job isn't in a state this instruction takes |
 | 10 | `WrongAmount` | `amount` isn't the job's |
-| 11 | `NotDirect` | another program called the escrow. Only direct calls are taken. Not in the deployed `4gCJP2bc…` yet |
+| 11 | `NotDirect` | another program called the escrow. Only direct calls are taken |
 
 LEZ itself refuses the rest, and those cost more. The transaction is still included, changes nothing and pays its whole gas limit:
 
