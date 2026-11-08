@@ -169,4 +169,4 @@ Notes on the LEZ version and toolchain choices are in [docs/research.md](docs/re
 
 ## License
 
-MIT or Apache 2.0.
+MIT ([LICENSE-MIT](LICENSE-MIT)) or Apache 2.0 ([LICENSE-APACHE](LICENSE-APACHE)).
