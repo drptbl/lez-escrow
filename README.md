@@ -17,8 +17,6 @@ Built for agent services in [logos-mcp](https://github.com/drptbl/logos-mcp), bu
 
 The program id is the account the program was deployed at, not the image id. Pass it as `program_id_hex` to `lez_core`.
 
-The live testnet runs, with every transaction, are in [docs/live-runs.md](docs/live-runs.md).
-
 The deployed binary is immutable. A fix means a new deploy at a new program id, and jobs already open finish on the old one.
 
 ## How it works
@@ -164,8 +162,6 @@ cargo run -p lez_escrow_cli -- deliver --buyer <id> --job-ref <hex> --result <he
 cargo run -p lez_escrow_cli -- claim --buyer <id> --job-ref <hex>
 cargo run -p lez_escrow_cli -- show --buyer <id> --job-ref <hex>
 ```
-
-Notes on the LEZ version and toolchain choices are in [docs/research.md](docs/research.md).
 
 ## License
 
