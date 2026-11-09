@@ -1,14 +1,27 @@
 //! Calls the escrow program on a LEZ sequencer from a LEZ wallet (`LEE_WALLET_HOME_DIR`).
 //!
-//! Each call goes through `WalletCore::send_pub_tx_paid_by`, which is what `lez_core`'s
-//! `send_generic_public_transaction` calls, and reads the job record back with `getAccount`.
+//! A call goes public through `WalletCore::send_pub_tx_paid_by`, which `lez_core`'s
+//! `send_generic_public_transaction` calls, or private through
+//! `WalletCore::send_privacy_preserving_tx` when the signer is one of the wallet's private
+//! accounts or the payee is a private payout address. The job record is read back with
+//! `getAccount`.
 
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::{
+    collections::HashMap,
+    path::PathBuf,
+    time::{SystemTime, UNIX_EPOCH},
+};
 
 use anyhow::{Context as _, Result, bail};
 use clap::{Parser, Subcommand};
-use lee_core::account::{AccountId, Balance};
-use logos_escrow_core::{Hash32, Instruction, Job, job_account_id};
+use lee::{privacy_preserving_transaction::circuit::ProgramWithDependencies, program::Program};
+use lee_core::{
+    Identifier, NullifierPublicKey,
+    account::{AccountId, Balance},
+    encryption::ViewingPublicKey,
+    program::PrivateAccountKind,
+};
+use logos_escrow_core::{Hash32, Instruction, Job, JobState, job_account_id};
 use wallet::{AccountIdentity, AccountMention, WalletCore};
 
 #[derive(Parser)]
@@ -17,9 +30,18 @@ struct Args {
     /// The escrow program's header account id (base58).
     #[arg(long, env = "LOGOS_ESCROW_PROGRAM", global = true)]
     program: Option<AccountId>,
-    /// A wallet account that pays every transaction's fee; by default the signer pays.
+    /// A wallet account that pays a public transaction's fee; by default the signer pays.
+    /// Private transactions are fee-exempt.
     #[arg(long, global = true)]
     payer: Option<AccountId>,
+    /// The escrow guest binary, which a private call proves locally.
+    #[arg(
+        long,
+        env = "LOGOS_ESCROW_ELF",
+        global = true,
+        default_value = "methods/guest/target/riscv32im-risc0-zkvm-elf/docker/logos_escrow.bin"
+    )]
+    elf: PathBuf,
     #[command(subcommand)]
     command: Command,
 }
@@ -33,18 +55,49 @@ struct JobArgs {
     job_ref: Hash32,
 }
 
+/// A payout from a job, to the payout address the job's record names.
+#[derive(clap::Args)]
+struct PayoutArgs {
+    #[command(flatten)]
+    job: JobArgs,
+    /// The payout address file, when the address is a fresh private account (see
+    /// `payout-address`).
+    #[arg(long)]
+    payee_address: Option<PathBuf>,
+    /// Pay a public account this wallet holds no key for. Without it, the CLI refuses to send a
+    /// payout it can't place, because a private address paid publicly is burned.
+    #[arg(long)]
+    public_payee: bool,
+}
+
 #[derive(Subcommand)]
 enum Command {
     /// Print the job account for a buyer and job reference.
     JobAccount(JobArgs),
     /// Print a job's record and the balance it holds.
     Show(JobArgs),
+    /// Make a fresh private payout address under one of the wallet's private accounts' keys.
+    /// Prints the account id to use in `open`, and writes its key file to `--out`. Keep that file:
+    /// claiming or refunding to a fresh address needs it.
+    PayoutAddress {
+        /// The wallet's private account whose keys own the address.
+        #[arg(long)]
+        owner: AccountId,
+        #[arg(long)]
+        out: PathBuf,
+    },
     /// Buyer: lock `amount` for `provider` until `deadline_ms` (or `in_secs` from now).
     Open {
         #[command(flatten)]
         job: JobArgs,
         #[arg(long)]
         provider: AccountId,
+        /// Where the provider is paid.
+        #[arg(long)]
+        pay_to: AccountId,
+        /// Where the buyer gets the deposit back.
+        #[arg(long)]
+        refund_to: AccountId,
         #[arg(long)]
         amount: Balance,
         #[arg(long, conflicts_with = "in_secs")]
@@ -59,19 +112,72 @@ enum Command {
         #[arg(long, value_parser = parse_hash)]
         result: Hash32,
     },
-    /// Provider: collect a delivered job.
-    Claim(JobArgs),
-    /// Buyer: pay the provider now.
+    /// Provider: collect a delivered or released job to its `pay_to`.
+    Claim(PayoutArgs),
+    /// Buyer: let the provider claim now.
     Release(JobArgs),
-    /// Buyer: take back an undelivered job after its deadline.
-    Refund(JobArgs),
-    /// Provider: give an open job's deposit back to the buyer.
+    /// Buyer: take an undelivered job back to its `refund_to`, after its deadline or once the
+    /// provider returned it.
+    Refund(PayoutArgs),
+    /// Provider: give an open job up, so the buyer can refund it at once.
     Return(JobArgs),
 }
 
 fn parse_hash(text: &str) -> Result<Hash32> {
     let bytes = hex::decode(text).context("not hex")?;
     <Hash32>::try_from(bytes).map_err(|_| anyhow::anyhow!("expected 32 bytes"))
+}
+
+/// A private account that only its owner's keys can spend, given out so another party can pay
+/// into it once.
+struct PayoutAddress {
+    npk: NullifierPublicKey,
+    vpk: ViewingPublicKey,
+    identifier: Identifier,
+}
+
+impl PayoutAddress {
+    fn account_id(&self) -> AccountId {
+        AccountId::for_regular_private_account(&self.npk, &self.vpk, self.identifier)
+    }
+
+    /// Three hex lines: the nullifier public key, the viewing public key, the identifier.
+    fn to_file(&self) -> String {
+        format!(
+            "{}\n{}\n{}\n",
+            hex::encode(self.npk.0),
+            hex::encode(self.vpk.to_bytes()),
+            hex::encode(self.identifier.value())
+        )
+    }
+
+    fn from_file(path: &PathBuf) -> Result<Self> {
+        let text = std::fs::read_to_string(path)
+            .with_context(|| format!("read payout address {}", path.display()))?;
+        let mut lines = text.lines().map(str::trim).filter(|line| !line.is_empty());
+        let mut next = |what: &str| {
+            lines
+                .next()
+                .with_context(|| format!("payout address file is missing the {what}"))
+        };
+        let npk = NullifierPublicKey(
+            hex::decode(next("nullifier public key")?)?
+                .try_into()
+                .map_err(|_| anyhow::anyhow!("nullifier public key must be 32 bytes"))?,
+        );
+        let vpk = ViewingPublicKey::from_bytes(hex::decode(next("viewing public key")?)?)
+            .map_err(|error| anyhow::anyhow!("viewing public key: {error}"))?;
+        let identifier = Identifier::new(
+            hex::decode(next("identifier")?)?
+                .try_into()
+                .map_err(|_| anyhow::anyhow!("identifier must be 32 bytes"))?,
+        );
+        Ok(Self {
+            npk,
+            vpk,
+            identifier,
+        })
+    }
 }
 
 #[tokio::main]
@@ -81,18 +187,43 @@ async fn main() -> Result<()> {
         .program
         .context("set --program or LOGOS_ESCROW_PROGRAM")?;
     let wallet = WalletCore::from_env().context("open the wallet at LEE_WALLET_HOME_DIR")?;
-    let escrow = Escrow {
+    let mut escrow = Escrow {
         wallet,
         program,
         payer: args.payer,
+        elf: args.elf,
     };
 
     match args.command {
         Command::JobAccount(job) => println!("{}", escrow.job_account(&job)),
         Command::Show(job) => escrow.show(&job).await?,
+        Command::PayoutAddress { owner, out } => {
+            let found = escrow
+                .wallet
+                .storage()
+                .key_chain()
+                .private_account(owner)
+                .with_context(|| format!("{owner} is not one of this wallet's private accounts"))?;
+            let address = PayoutAddress {
+                npk: found.key_chain.nullifier_public_key,
+                vpk: found.key_chain.viewing_public_key.clone(),
+                identifier: wallet::cli::identifier_or_random(None),
+            };
+            // The identifier exists only in this file, and a fresh address can't be claimed to
+            // without it, so never overwrite another job's address.
+            let mut file = std::fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&out)
+                .with_context(|| format!("create {} (it must not exist yet)", out.display()))?;
+            std::io::Write::write_all(&mut file, address.to_file().as_bytes())?;
+            println!("{}", address.account_id());
+        }
         Command::Open {
             job,
             provider,
+            pay_to,
+            refund_to,
             amount,
             deadline_ms,
             in_secs,
@@ -108,6 +239,8 @@ async fn main() -> Result<()> {
             let instruction = Instruction::Open {
                 job_ref: job.job_ref,
                 provider,
+                pay_to,
+                refund_to,
                 amount,
                 deadline,
             };
@@ -129,57 +262,51 @@ async fn main() -> Result<()> {
             ];
             escrow.send(&job, accounts, &instruction).await?;
         }
-        Command::Claim(job) => {
-            let record = escrow.record(&job).await?;
+        Command::Claim(payout) => {
+            // Sync first, so a payout address someone already paid into is used as the wallet's own.
+            escrow.wallet.sync_to_latest_block().await?;
+            let record = escrow.record(&payout.job).await?;
             let instruction = Instruction::Claim {
-                buyer: job.buyer,
-                job_ref: job.job_ref,
+                buyer: payout.job.buyer,
+                job_ref: payout.job.job_ref,
                 amount: record.amount,
             };
-            let accounts = vec![
-                escrow.signs(record.provider),
-                escrow.mention(escrow.job_account(&job)),
-            ];
-            escrow.send(&job, accounts, &instruction).await?;
+            let accounts = escrow.payout_accounts(&payout, record.provider, record.pay_to)?;
+            escrow.send(&payout.job, accounts, &instruction).await?;
         }
         Command::Release(job) => {
-            let record = escrow.record(&job).await?;
             let instruction = Instruction::Release {
                 job_ref: job.job_ref,
-                amount: record.amount,
             };
             let accounts = vec![
                 escrow.signs(job.buyer),
                 escrow.mention(escrow.job_account(&job)),
-                escrow.mention(record.provider),
             ];
             escrow.send(&job, accounts, &instruction).await?;
         }
-        Command::Refund(job) => {
-            let record = escrow.record(&job).await?;
+        Command::Refund(payout) => {
+            escrow.wallet.sync_to_latest_block().await?;
+            let record = escrow.record(&payout.job).await?;
             let instruction = Instruction::Refund {
-                job_ref: job.job_ref,
+                job_ref: payout.job.job_ref,
                 amount: record.amount,
-                deadline: record.deadline,
+                // A returned job refunds at once, so its deadline no longer applies.
+                deadline: if record.state == JobState::Returned {
+                    0
+                } else {
+                    record.deadline
+                },
             };
-            let accounts = vec![
-                escrow.signs(job.buyer),
-                escrow.mention(escrow.job_account(&job)),
-            ];
-            escrow.send(&job, accounts, &instruction).await?;
+            let accounts = escrow.payout_accounts(&payout, payout.job.buyer, record.refund_to)?;
+            escrow.send(&payout.job, accounts, &instruction).await?;
         }
         Command::Return(job) => {
             let record = escrow.record(&job).await?;
-            let instruction = Instruction::Return {
-                job_ref: job.job_ref,
-                amount: record.amount,
-            };
             let accounts = vec![
                 escrow.signs(record.provider),
                 escrow.mention(escrow.job_account(&job)),
-                escrow.mention(job.buyer),
             ];
-            escrow.send(&job, accounts, &instruction).await?;
+            escrow.send(&job, accounts, &Instruction::Return).await?;
         }
     }
     Ok(())
@@ -195,6 +322,7 @@ struct Escrow {
     wallet: WalletCore,
     program: AccountId,
     payer: Option<AccountId>,
+    elf: PathBuf,
 }
 
 impl Escrow {
@@ -202,11 +330,23 @@ impl Escrow {
         job_account_id(&self.program, &job.buyer, &job.job_ref)
     }
 
-    /// A signing account. Every account selects the escrow program's shard; the program builds
-    /// the native-balance selectors for the transfers it chains.
+    /// The signer: one of the wallet's private accounts if it holds one with this id, otherwise a
+    /// public account. Every account selects the escrow program's shard; the program builds the
+    /// native-balance selectors for the transfers it chains.
     fn signs(&self, account_id: AccountId) -> AccountMention {
+        let private = self
+            .wallet
+            .storage()
+            .key_chain()
+            .private_account(account_id)
+            .is_some();
+        let identity = if private {
+            AccountIdentity::PrivateOwned(account_id)
+        } else {
+            AccountIdentity::Public(account_id)
+        };
         AccountMention {
-            identity: AccountIdentity::Public(account_id),
+            identity,
             program_account_id: self.program,
         }
     }
@@ -217,6 +357,57 @@ impl Escrow {
             identity: AccountIdentity::PublicNoSign(account_id),
             program_account_id: self.program,
         }
+    }
+
+    /// The signer, the job account and, unless the job pays the signer itself, the payee.
+    fn payout_accounts(
+        &self,
+        payout: &PayoutArgs,
+        signer: AccountId,
+        payee: AccountId,
+    ) -> Result<Vec<AccountMention>> {
+        let mut accounts = vec![
+            self.signs(signer),
+            self.mention(self.job_account(&payout.job)),
+        ];
+        if payee != signer {
+            accounts.push(self.payee(payee, payout)?);
+        }
+        Ok(accounts)
+    }
+
+    /// The payout address, as the account kind the wallet can pay into: one of its own private
+    /// accounts, a fresh private account from an address file, or a public account.
+    fn payee(&self, payee: AccountId, payout: &PayoutArgs) -> Result<AccountMention> {
+        let key_chain = self.wallet.storage().key_chain();
+        let identity = if key_chain.private_account(payee).is_some() {
+            AccountIdentity::PrivateOwned(payee)
+        } else if let Some(path) = &payout.payee_address {
+            let address = PayoutAddress::from_file(path)?;
+            if address.account_id() != payee {
+                bail!(
+                    "{} is the address {}, but the job pays {payee}",
+                    path.display(),
+                    address.account_id()
+                );
+            }
+            AccountIdentity::PrivateForeign {
+                npk: address.npk,
+                vpk: address.vpk,
+                kind: PrivateAccountKind::Regular(address.identifier),
+            }
+        } else if payout.public_payee || key_chain.pub_account_signing_key(payee).is_some() {
+            AccountIdentity::PublicNoSign(payee)
+        } else {
+            bail!(
+                "can't tell what kind of account {payee} is: pass --payee-address for a private \
+                 payout address, or --public-payee for a public account"
+            );
+        };
+        Ok(AccountMention {
+            identity,
+            program_account_id: self.program,
+        })
     }
 
     async fn record(&self, job: &JobArgs) -> Result<Job> {
@@ -244,18 +435,37 @@ impl Escrow {
     }
 
     async fn send(
-        &self,
+        &mut self,
         job: &JobArgs,
         accounts: Vec<AccountMention>,
         instruction: &Instruction,
     ) -> Result<()> {
         let data = borsh::to_vec(instruction)?;
         println!("instruction: {}", hex::encode(&data));
-        let hash = self
-            .wallet
-            .send_pub_tx_paid_by(accounts, data, self.program, self.payer)
-            .await
-            .map_err(|error| anyhow::anyhow!("send failed: {error:?}"))?;
+        let private = accounts.iter().any(|mention| mention.identity.is_private());
+        let hash = if private {
+            // The wallet proves against the private accounts' latest notes.
+            self.wallet.sync_to_latest_block().await?;
+            let elf = std::fs::read(&self.elf)
+                .with_context(|| format!("read the escrow binary at {}", self.elf.display()))?;
+            let program = ProgramWithDependencies::new(
+                Program::new(elf.into())?,
+                self.program,
+                HashMap::new(),
+            );
+            println!("proving locally...");
+            let (hash, _) = self
+                .wallet
+                .send_privacy_preserving_tx(accounts, data, &program)
+                .await
+                .map_err(|error| anyhow::anyhow!("send failed: {error:?}"))?;
+            hash
+        } else {
+            self.wallet
+                .send_pub_tx_paid_by(accounts, data, self.program, self.payer)
+                .await
+                .map_err(|error| anyhow::anyhow!("send failed: {error:?}"))?
+        };
         println!("tx:          {hash}");
         let (_, block) = self
             .wallet
@@ -263,7 +473,66 @@ impl Escrow {
             .await
             .context("transaction not included")?;
         println!("block:       {block}");
-        // Inclusion does not mean success: a refused call is included and charged. Read back.
+        if private {
+            self.wallet.sync_to_latest_block().await?;
+            self.wallet.store_persistent_data()?;
+        }
+        // A public call that was refused is still included and charged, so read the record back.
         self.show(job).await
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn address() -> PayoutAddress {
+        PayoutAddress {
+            npk: NullifierPublicKey([1; 32]),
+            vpk: ViewingPublicKey::from_bytes(vec![2; 1184]).expect("1184-byte key"),
+            identifier: Identifier::new([3; 32]),
+        }
+    }
+
+    fn written(name: &str, text: &str) -> PathBuf {
+        let path = std::env::temp_dir().join(format!(
+            "logos-escrow-test-{}-{name}.addr",
+            std::process::id()
+        ));
+        std::fs::write(&path, text).expect("write the address file");
+        path
+    }
+
+    #[test]
+    fn a_payout_address_file_round_trips_to_the_same_account() {
+        let path = written("round-trip", &address().to_file());
+        let read = PayoutAddress::from_file(&path).expect("reads back");
+        std::fs::remove_file(&path).ok();
+        assert_eq!(read.account_id(), address().account_id());
+        assert_eq!(read.identifier, address().identifier);
+    }
+
+    /// Computed independently: SHA-256 of the 32-byte prefix, npk, vpk and identifier, with
+    /// Python's `hashlib`.
+    #[test]
+    fn the_address_is_the_lez_private_account_id_of_its_keys() {
+        assert_eq!(
+            address().account_id().to_string(),
+            "9aook7Yh6sHfiPGHwWS2AG3HEhbKZAtaWj8TryeZRfhv"
+        );
+    }
+
+    #[test]
+    fn a_truncated_address_file_is_refused() {
+        let full = address().to_file();
+        let two_lines: String = full
+            .lines()
+            .take(2)
+            .map(|line| format!("{line}\n"))
+            .collect();
+        let path = written("truncated", &two_lines);
+        let read = PayoutAddress::from_file(&path);
+        std::fs::remove_file(&path).ok();
+        assert!(read.is_err());
     }
 }

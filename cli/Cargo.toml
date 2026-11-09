@@ -11,6 +11,7 @@ path = "src/main.rs"
 
 [dependencies]
 logos_escrow_core = { path = "../core" }
+lee.workspace = true
 lee_core.workspace = true
 borsh.workspace = true
 # The wallet `lez_core` wraps, so calls take the same path logos-mcp's will.
