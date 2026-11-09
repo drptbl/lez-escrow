@@ -245,18 +245,19 @@ fn opening_after_the_deadline_is_refused() {
 }
 
 #[test]
-fn the_buyer_can_release_to_the_pay_to() {
+fn a_released_job_is_claimed_to_the_pay_to() {
     let mut chain = Chain::new();
     chain.open().expect("open");
 
-    let release = Instruction::Release {
-        job_ref: JOB_REF,
-        amount: AMOUNT,
-    };
+    let release = Instruction::Release { job_ref: JOB_REF };
     chain
-        .call(&buyer(), &[buyer().id, job(), PAY_TO], &release, BEFORE)
+        .call(&buyer(), &[buyer().id, job()], &release, BEFORE)
         .expect("release");
     assert_eq!(chain.job().state, JobState::Released);
+    assert_eq!(chain.balance(job()), AMOUNT);
+
+    chain.claim().expect("claim");
+    assert_eq!(chain.job().state, JobState::Claimed);
     assert_eq!(chain.balance(PAY_TO), AMOUNT);
     assert_eq!(chain.balance(job()), 0);
 }
@@ -301,25 +302,57 @@ fn nobody_can_move_the_deposit_without_the_escrow_program() {
 }
 
 #[test]
-fn the_provider_can_give_an_open_job_back_before_the_deadline() {
+fn a_returned_job_is_refunded_before_the_deadline() {
     let mut chain = Chain::new();
     chain.open().expect("open");
 
-    let give_back = Instruction::Return {
-        buyer: buyer().id,
-        job_ref: JOB_REF,
-        amount: AMOUNT,
-    };
     chain
         .call(
             &provider(),
-            &[provider().id, job(), REFUND_TO],
-            &give_back,
+            &[provider().id, job()],
+            &Instruction::Return,
             BEFORE,
         )
         .expect("return");
+    assert_eq!(chain.job().state, JobState::Returned);
+    assert_eq!(chain.balance(job()), AMOUNT);
+
+    let refund = Instruction::Refund {
+        job_ref: JOB_REF,
+        amount: AMOUNT,
+        deadline: 0,
+    };
+    chain
+        .call(&buyer(), &[buyer().id, job(), REFUND_TO], &refund, BEFORE)
+        .expect("refund before the deadline");
     assert_eq!(chain.job().state, JobState::Refunded);
-    assert_eq!(chain.balance(job()), 0);
     assert_eq!(chain.balance(REFUND_TO), AMOUNT);
     assert_eq!(chain.balance(provider().id), START);
+}
+
+#[test]
+fn a_job_paying_the_buyer_itself_refunds_with_two_accounts() {
+    let mut chain = Chain::new();
+    let open = Instruction::Open {
+        job_ref: JOB_REF,
+        provider: provider().id,
+        pay_to: provider().id,
+        refund_to: buyer().id,
+        amount: AMOUNT,
+        deadline: DEADLINE,
+    };
+    chain
+        .call(&buyer(), &[buyer().id, job()], &open, BEFORE)
+        .expect("open");
+
+    let refund = Instruction::Refund {
+        job_ref: JOB_REF,
+        amount: AMOUNT,
+        deadline: DEADLINE,
+    };
+    chain
+        .call(&buyer(), &[buyer().id, job()], &refund, DEADLINE)
+        .expect("refund to the buyer itself");
+    assert_eq!(chain.job().state, JobState::Refunded);
+    assert_eq!(chain.balance(buyer().id), START);
 }

@@ -46,8 +46,10 @@ pub fn job_account_id(program: &AccountId, buyer: &AccountId, job_ref: &Hash32) 
 
 /// The escrow program's instructions, borsh-encoded as the transaction's instruction data.
 ///
-/// Payouts go to the addresses fixed at `Open`, not to the signer, so a payee can be a fresh
-/// private account that only the payout ever touches.
+/// Money only ever moves to the addresses fixed at `Open`, and only when the side being paid
+/// asks: the provider pulls with `Claim`, the buyer with `Refund`. `Release` and `Return` just
+/// let the other side pull early. So nobody pays into someone else's address, which in LEZ can
+/// burn a private one or be blocked.
 #[derive(Debug, Clone, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub enum Instruction {
     /// Locks `amount` from the buyer for `provider` until `deadline`. The provider is paid to
@@ -64,30 +66,29 @@ pub enum Instruction {
     /// Records the provider's result hash. Only before the job's `deadline`.
     /// Accounts: `[provider (signs), job]`.
     Deliver { result: Hash32, deadline: Timestamp },
-    /// Pays a delivered job's `amount` to its `pay_to`.
-    /// Accounts: `[provider (signs), job, pay_to]`.
+    /// Pays a delivered or released job's `amount` to its `pay_to`.
+    /// Accounts: `[provider (signs), job, pay_to]`, or `[provider (signs), job]` when `pay_to` is
+    /// the provider.
     Claim {
         buyer: AccountId,
         job_ref: Hash32,
         amount: Balance,
     },
-    /// Pays an open or delivered job's `amount` to its `pay_to`, at any time.
-    /// Accounts: `[buyer (signs), job, pay_to]`.
-    Release { job_ref: Hash32, amount: Balance },
-    /// Returns an undelivered job's `amount` to its `refund_to`. Only from the job's `deadline`
-    /// on. Accounts: `[buyer (signs), job, refund_to]`.
+    /// Lets the provider claim an open or delivered job at once. Moves no money.
+    /// Accounts: `[buyer (signs), job]`.
+    Release { job_ref: Hash32 },
+    /// Pays an open job's `amount` back to its `refund_to` from the job's `deadline` on, or a
+    /// returned job's at any time, when `deadline` is ignored.
+    /// Accounts: `[buyer (signs), job, refund_to]`, or `[buyer (signs), job]` when `refund_to` is
+    /// the buyer.
     Refund {
         job_ref: Hash32,
         amount: Balance,
         deadline: Timestamp,
     },
-    /// The provider gives an open job's `amount` back to its `refund_to`, at any time.
-    /// Accounts: `[provider (signs), job, refund_to]`.
-    Return {
-        buyer: AccountId,
-        job_ref: Hash32,
-        amount: Balance,
-    },
+    /// The provider gives up an open job, so the buyer can refund it at once. Moves no money.
+    /// Accounts: `[provider (signs), job]`.
+    Return,
 }
 
 /// Where a job is in its life.
@@ -96,8 +97,11 @@ pub enum JobState {
     Open,
     Delivered,
     Claimed,
+    /// The buyer released the job; the provider can claim it.
     Released,
     Refunded,
+    /// The provider returned the job; the buyer can refund it.
+    Returned,
 }
 
 /// The job record, stored in the escrow program's shard of the job account.
@@ -181,10 +185,7 @@ enum Effect {
         payee: AccountId,
         amount: Balance,
     },
-    Release {
-        payee: AccountId,
-        amount: Balance,
-    },
+    Release,
     Refund {
         payee: AccountId,
         amount: Balance,
@@ -192,8 +193,6 @@ enum Effect {
     },
     Return {
         provider: AccountId,
-        payee: AccountId,
-        amount: Balance,
     },
 }
 
@@ -259,88 +258,54 @@ pub fn plan(input: &PlanInput) -> Result<Plan, EscrowError> {
             job_ref,
             amount,
         } => {
-            let [provider, job, payee] = accounts(input)?;
+            let (provider, job, payee) = payout_accounts(input)?;
             signed(provider)?;
             let seed = job_account(input, job, buyer, &job_ref)?;
             plan.effect(
                 job,
                 &Effect::Claim {
                     provider: provider.account_id,
-                    payee: payee.account_id,
+                    payee,
                     amount,
                 },
             );
-            plan.call(custody_transfer(
-                job.account_id,
-                seed,
-                payee.account_id,
-                amount,
-            ));
+            plan.call(custody_transfer(job.account_id, seed, payee, amount));
         }
-        Instruction::Release { job_ref, amount } => {
-            let [buyer, job, payee] = accounts(input)?;
+        Instruction::Release { job_ref } => {
+            let [buyer, job] = accounts(input)?;
             signed(buyer)?;
-            let seed = job_account(input, job, buyer.account_id, &job_ref)?;
-            plan.effect(
-                job,
-                &Effect::Release {
-                    payee: payee.account_id,
-                    amount,
-                },
-            );
-            plan.call(custody_transfer(
-                job.account_id,
-                seed,
-                payee.account_id,
-                amount,
-            ));
+            job_account(input, job, buyer.account_id, &job_ref)?;
+            plan.effect(job, &Effect::Release);
         }
         Instruction::Refund {
             job_ref,
             amount,
             deadline,
         } => {
-            let [buyer, job, payee] = accounts(input)?;
+            let (buyer, job, payee) = payout_accounts(input)?;
             signed(buyer)?;
             let seed = job_account(input, job, buyer.account_id, &job_ref)?;
             plan.effect(
                 job,
                 &Effect::Refund {
-                    payee: payee.account_id,
+                    payee,
                     amount,
                     deadline,
                 },
             );
-            plan.call(custody_transfer(
-                job.account_id,
-                seed,
-                payee.account_id,
-                amount,
-            ));
+            plan.call(custody_transfer(job.account_id, seed, payee, amount));
             plan.timestamp_window(deadline..);
         }
-        Instruction::Return {
-            buyer,
-            job_ref,
-            amount,
-        } => {
-            let [provider, job, payee] = accounts(input)?;
+        Instruction::Return => {
+            let [provider, job] = accounts(input)?;
             signed(provider)?;
-            let seed = job_account(input, job, buyer, &job_ref)?;
+            own_shard(input, job)?;
             plan.effect(
                 job,
                 &Effect::Return {
                     provider: provider.account_id,
-                    payee: payee.account_id,
-                    amount,
                 },
             );
-            plan.call(custody_transfer(
-                job.account_id,
-                seed,
-                payee.account_id,
-                amount,
-            ));
         }
     }
     Ok(plan)
@@ -388,20 +353,14 @@ pub fn apply(input: &ApplyInput) -> Result<ShardData, EscrowError> {
             if job.amount != amount {
                 return Err(EscrowError::WrongAmount);
             }
-            if job.state != JobState::Delivered {
+            if !matches!(job.state, JobState::Delivered | JobState::Released) {
                 return Err(EscrowError::WrongState);
             }
             job.state = JobState::Claimed;
             job
         }
-        Effect::Release { payee, amount } => {
+        Effect::Release => {
             let mut job = load(&input.pre_data)?;
-            if job.pay_to != payee {
-                return Err(EscrowError::WrongParty);
-            }
-            if job.amount != amount {
-                return Err(EscrowError::WrongAmount);
-            }
             if !matches!(job.state, JobState::Open | JobState::Delivered) {
                 return Err(EscrowError::WrongState);
             }
@@ -420,31 +379,26 @@ pub fn apply(input: &ApplyInput) -> Result<ShardData, EscrowError> {
             if job.amount != amount {
                 return Err(EscrowError::WrongAmount);
             }
-            if job.deadline != deadline {
-                return Err(EscrowError::WrongDeadline);
-            }
-            if job.state != JobState::Open {
-                return Err(EscrowError::WrongState);
+            match job.state {
+                // The window `deadline..` only holds the refund back if it is the job's deadline.
+                JobState::Open if job.deadline != deadline => {
+                    return Err(EscrowError::WrongDeadline);
+                }
+                JobState::Open | JobState::Returned => {}
+                _ => return Err(EscrowError::WrongState),
             }
             job.state = JobState::Refunded;
             job
         }
-        Effect::Return {
-            provider,
-            payee,
-            amount,
-        } => {
+        Effect::Return { provider } => {
             let mut job = load(&input.pre_data)?;
-            if job.provider != provider || job.refund_to != payee {
+            if job.provider != provider {
                 return Err(EscrowError::WrongParty);
-            }
-            if job.amount != amount {
-                return Err(EscrowError::WrongAmount);
             }
             if job.state != JobState::Open {
                 return Err(EscrowError::WrongState);
             }
-            job.state = JobState::Refunded;
+            job.state = JobState::Returned;
             job
         }
     };
@@ -452,6 +406,18 @@ pub fn apply(input: &ApplyInput) -> Result<ShardData, EscrowError> {
         ShardData::try_from(borsh::to_vec(&next).expect("a job record serializes"))
             .expect("a job record fits in a shard"),
     )
+}
+
+/// The signer, the job account and the payee of a payout. The payee is left out when it is the
+/// signer, because LEZ refuses a call that names the same account twice.
+fn payout_accounts(
+    input: &PlanInput,
+) -> Result<(&AccountMeta, &AccountMeta, AccountId), EscrowError> {
+    match input.accounts.as_slice() {
+        [signer, job] => Ok((signer, job, signer.account_id)),
+        [signer, job, payee] => Ok((signer, job, payee.account_id)),
+        _ => Err(EscrowError::InvalidInstruction),
+    }
 }
 
 fn accounts<const N: usize>(input: &PlanInput) -> Result<&[AccountMeta; N], EscrowError> {
