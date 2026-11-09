@@ -5897,6 +5897,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "private_job_prototype"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "borsh",
+ "common",
+ "hex",
+ "key_protocol",
+ "lee",
+ "lee_core",
+ "logos_escrow_core",
+ "tokio",
+ "wallet",
+]
+
+[[package]]
 name = "proc-macro-crate"
 version = "3.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"

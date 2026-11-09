@@ -1,0 +1,19 @@
+# PROTOTYPE, throwaway: answers whether a fully private escrow job works on LEZ v0.3.1.
+[package]
+name = "private_job_prototype"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+logos_escrow_core = { path = "../../core" }
+lee.workspace = true
+lee_core.workspace = true
+borsh.workspace = true
+wallet = { git = "https://github.com/logos-blockchain/logos-execution-zone.git", tag = "v0.3.1" }
+common = { git = "https://github.com/logos-blockchain/logos-execution-zone.git", tag = "v0.3.1" }
+key_protocol = { git = "https://github.com/logos-blockchain/logos-execution-zone.git", tag = "v0.3.1" }
+anyhow = "1"
+hex = "0.4"
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
