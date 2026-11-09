@@ -1,8 +1,8 @@
 //! Job escrow for the Logos Execution Zone (LEZ v0.3).
 //!
 //! A buyer locks a payment for one job in a job account derived from the buyer and the job's
-//! reference. The provider is paid when it delivers and claims, or when the buyer releases; the
-//! buyer gets the deposit back when the provider has not delivered by the deadline.
+//! reference. The provider claims it once it has delivered, or once the buyer releases it early;
+//! the buyer refunds it when the provider hasn't delivered by the deadline, or has returned it.
 //!
 //! LEZ calls a program twice. `plan` sees the instruction and the account handles but no account
 //! data, so every instruction carries the values the job record must match. `apply` sees the job
@@ -109,9 +109,9 @@ pub enum JobState {
 pub struct Job {
     pub buyer: AccountId,
     pub provider: AccountId,
-    /// Where `Claim` and `Release` pay.
+    /// Where `Claim` pays.
     pub pay_to: AccountId,
-    /// Where `Refund` and `Return` pay.
+    /// Where `Refund` pays.
     pub refund_to: AccountId,
     pub amount: Balance,
     /// Milliseconds since the Unix epoch.

@@ -73,7 +73,7 @@ send_generic_public_transaction(account_ids, signing_requirements, instruction, 
 - `signing_requirements` is `true` only for the signer, whose key the wallet must hold.
 - `instruction` is the Borsh bytes below.
 - `program_id_hex` is the program id.
-- `payer_account_id_hex` may be empty, in which case the signer pays. It may also be any other funded account the wallet holds, which then co-signs. The wallet refuses a payer that is in `account_ids` without signing, such as the `pay_to` on a `Release`.
+- `payer_account_id_hex` may be empty, in which case the signer pays. It may also be any other funded account the wallet holds, which then co-signs. The wallet refuses a payer that is in `account_ids` without signing, such as the `pay_to` on a `Claim` or the `refund_to` on a `Refund`.
 - `shard_program_account_ids_hex` is empty, which selects the escrow program's shard of every account.
 
 | Instruction | `account_ids` | Signs | Allowed when | Moves |
@@ -176,7 +176,7 @@ The program refuses a call by exiting with one of these codes. LEZ then charges 
 | --- | --- | --- |
 | 1 | `InvalidInstruction` | instruction data or account list doesn't decode |
 | 2 | `Unauthorized` | the account that must sign didn't |
-| 3 | `WrongJobAccount` | job account isn't the one derived from buyer and `job_ref`. `Deliver` only checks that the account selects the escrow shard. Any other wrong account shows up as `WrongParty`, `WrongDeadline` or `NoJob` |
+| 3 | `WrongJobAccount` | job account isn't the one derived from buyer and `job_ref`. `Deliver` and `Return` only check that the account selects the escrow shard, so there any other wrong account shows up as `WrongParty`, `WrongDeadline` or `NoJob` |
 | 4 | `JobExists` | `Open` on a job account that already has a record |
 | 5 | `InvalidTerms` | `Open` with a zero amount, the buyer as provider, or the job account as a payout address |
 | 6 | `WrongParty` | the signer isn't the job's buyer or provider as the instruction needs, or the payee isn't its `pay_to` or `refund_to` |
@@ -186,9 +186,9 @@ The program refuses a call by exiting with one of these codes. LEZ then charges 
 | 10 | `WrongAmount` | `amount` isn't the job's |
 | 11 | `NotDirect` | another program called the escrow. Only direct calls are taken |
 
-LEZ itself refuses the rest, and those cost more. The transaction is still included, changes nothing and pays its whole gas limit:
+LEZ itself refuses the rest. In a public call those cost more: the transaction is still included, changes nothing and pays its whole gas limit. In a private call they are dropped like any other refusal.
 
-- `OutOfValidityWindow`: an `Open` or `Deliver` at or after the deadline, or a `Refund` before it
+- `OutOfValidityWindow`: an `Open` or `Deliver` at or after the deadline, or a `Refund` before it on a job that wasn't returned
 - `NativeTransferFailed`: an `Open` the buyer can't fund
 
 Check the deadline and the buyer's balance before you send.
@@ -215,7 +215,7 @@ cargo run -p logos_escrow_cli -- claim --buyer <id> --job-ref <hex> --payee-addr
 cargo run -p logos_escrow_cli -- show --buyer <id> --job-ref <hex>
 ```
 
-`payout-address` makes a fresh private address under one of your private accounts' keys, prints its id for `open`, and writes the file you pass as `--payee-address` when you claim or refund to it. Once your wallet holds the address, the CLI uses it directly. For someone else's public account, pass `--public-payee`. Otherwise the CLI refuses a payout it can't place.
+`payout-address` makes a fresh private address under one of your private accounts' keys, prints its id for `open`, and writes the file you pass as `--payee-address` when you claim or refund to it. Keep that file: its identifier is the only way to reach a fresh address, so the command never overwrites one. Once your wallet holds the address, the CLI uses it directly. For someone else's public account, pass `--public-payee`. Otherwise the CLI refuses a payout it can't place.
 
 ## License
 
