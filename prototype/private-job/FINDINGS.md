@@ -27,7 +27,7 @@ What a public observer finds in the open transaction's bytes:
 
 `Open` used to check the job account against the public PDA formula. A plan can't compute a private PDA's id, which also needs keys the plan never sees. So `Open` now calls the escrow itself with the job's PDA seed (`VerifyJob`). LEZ authorizes the job account in that call only when it is the escrow's PDA for that seed, public or private.
 
-The other instructions drop the formula. Payouts already need that seed, and the record checks the signer. The public runtime tests pass, including a refused `Open` on someone else's job account.
+The other instructions drop the formula. Payouts already need that seed, and the record checks the signer. The public runtime tests pass, including a refused `Open` on someone else's job account. In the run above, the same self-call granted a **private** PDA: job 1's `Open` passed `VerifyJob` with the job account as a shared private PDA. That is what any production version would rely on.
 
 ## Gaps outside this repo
 
@@ -38,7 +38,7 @@ The other instructions drop the formula. Payouts already need that seed, and the
 
 Any update to the job account spends its current note. If both parties prove against the same state, whichever transaction lands first wins, and the other is never included, so its sender has to sync and try again.
 
-That also means either party can stall the other by touching the job account first, for free, since private transactions cost nothing in `v0.3.1`. Nobody can take the money that way: every change still goes through the escrow's rules. But each blocked attempt costs the other side a proof, about 30 to 60 seconds, and a stalled `Deliver` can run past the deadline. I inferred this from the race and didn't run a deliberate stalling attack.
+So a party that keeps updating the job first can keep the other's transactions from landing. Each blocked attempt costs the other side a proof, about 30 to 60 seconds, and a stalled `Deliver` can run past the deadline. Nobody can take the money this way, because every escrow change still follows the escrow's rules. Untested: whether a party can force such updates cheaply outside the escrow's own instructions, for example by sending the job account a tiny private transfer, which would be free in `v0.3.1`.
 
 ## Not checked
 
