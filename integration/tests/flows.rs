@@ -356,3 +356,24 @@ fn a_job_paying_the_buyer_itself_refunds_with_two_accounts() {
     assert_eq!(chain.job().state, JobState::Refunded);
     assert_eq!(chain.balance(buyer().id), START);
 }
+
+/// PROTOTYPE: the job check now runs in a call the escrow makes to itself with the job's seed.
+#[test]
+fn open_on_an_account_that_isnt_the_jobs_pda_is_refused_by_the_self_check() {
+    let mut chain = Chain::new();
+    let open = Instruction::Open {
+        job_ref: JOB_REF,
+        provider: provider().id,
+        pay_to: PAY_TO,
+        refund_to: REFUND_TO,
+        amount: AMOUNT,
+        deadline: DEADLINE,
+    };
+    let someone_elses = job_account_id(&PROGRAM, &provider().id, &JOB_REF);
+    let squat = chain.call(&buyer(), &[buyer().id, someone_elses], &open, BEFORE);
+    assert!(
+        refused_with(logos_escrow_core::EscrowError::WrongJobAccount.code())(&squat),
+        "{squat:?}"
+    );
+    assert_eq!(chain.balance(buyer().id), START);
+}

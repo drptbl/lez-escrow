@@ -89,6 +89,11 @@ pub enum Instruction {
     /// The provider gives up an open job, so the buyer can refund it at once. Moves no money.
     /// Accounts: `[provider (signs), job]`.
     Return,
+    /// PROTOTYPE: only the escrow calls this, from `Open`, with the job's PDA seed. LEZ
+    /// authorizes the job account in that call only when it is the escrow's PDA for that seed,
+    /// public or private, so this checks what a plan can't compute for a private PDA.
+    /// Accounts: `[job]`.
+    VerifyJob,
 }
 
 /// Where a job is in its life.
@@ -185,8 +190,11 @@ enum Effect {
         payee: AccountId,
         amount: Balance,
     },
-    Release,
+    Release {
+        buyer: AccountId,
+    },
     Refund {
+        buyer: AccountId,
         payee: AccountId,
         amount: Balance,
         deadline: Timestamp,
@@ -200,8 +208,16 @@ enum Effect {
 pub fn plan(input: &PlanInput) -> Result<Plan, EscrowError> {
     let instruction: Instruction =
         borsh::from_slice(&input.instruction_data).map_err(|_| EscrowError::InvalidInstruction)?;
-    if input.caller_account_id.is_some() {
-        return Err(EscrowError::NotDirect);
+    match (input.caller_account_id, &instruction) {
+        (Some(caller), Instruction::VerifyJob) if caller == input.self_account_id => {
+            let [job] = accounts(input)?;
+            if !job.is_authorized {
+                return Err(EscrowError::WrongJobAccount);
+            }
+            return Ok(Plan::new(input));
+        }
+        (Some(_), _) | (None, Instruction::VerifyJob) => return Err(EscrowError::NotDirect),
+        (None, _) => {}
     }
     let mut plan = Plan::new(input);
     match instruction {
@@ -215,7 +231,8 @@ pub fn plan(input: &PlanInput) -> Result<Plan, EscrowError> {
         } => {
             let [buyer, job] = accounts(input)?;
             signed(buyer)?;
-            job_account(input, job, buyer.account_id, &job_ref)?;
+            own_shard(input, job)?;
+            let seed = job_seed(&buyer.account_id, &job_ref);
             if amount == 0
                 || provider == buyer.account_id
                 || pay_to == job.account_id
@@ -237,6 +254,17 @@ pub fn plan(input: &PlanInput) -> Result<Plan, EscrowError> {
                 }),
             );
             plan.call(native_transfer(buyer.account_id, job.account_id, amount));
+            plan.call(
+                ChainedCall::new(
+                    input.self_account_id,
+                    vec![ProgramShardSelector::new(
+                        job.account_id,
+                        input.self_account_id,
+                    )],
+                    &Instruction::VerifyJob,
+                )
+                .with_pda_seeds(vec![seed]),
+            );
             plan.timestamp_window(..deadline);
         }
         Instruction::Deliver { result, deadline } => {
@@ -260,7 +288,8 @@ pub fn plan(input: &PlanInput) -> Result<Plan, EscrowError> {
         } => {
             let (provider, job, payee) = payout_accounts(input)?;
             signed(provider)?;
-            let seed = job_account(input, job, buyer, &job_ref)?;
+            own_shard(input, job)?;
+            let seed = job_seed(&buyer, &job_ref);
             plan.effect(
                 job,
                 &Effect::Claim {
@@ -274,8 +303,14 @@ pub fn plan(input: &PlanInput) -> Result<Plan, EscrowError> {
         Instruction::Release { job_ref } => {
             let [buyer, job] = accounts(input)?;
             signed(buyer)?;
-            job_account(input, job, buyer.account_id, &job_ref)?;
-            plan.effect(job, &Effect::Release);
+            own_shard(input, job)?;
+            let _ = job_ref;
+            plan.effect(
+                job,
+                &Effect::Release {
+                    buyer: buyer.account_id,
+                },
+            );
         }
         Instruction::Refund {
             job_ref,
@@ -284,10 +319,12 @@ pub fn plan(input: &PlanInput) -> Result<Plan, EscrowError> {
         } => {
             let (buyer, job, payee) = payout_accounts(input)?;
             signed(buyer)?;
-            let seed = job_account(input, job, buyer.account_id, &job_ref)?;
+            own_shard(input, job)?;
+            let seed = job_seed(&buyer.account_id, &job_ref);
             plan.effect(
                 job,
                 &Effect::Refund {
+                    buyer: buyer.account_id,
                     payee,
                     amount,
                     deadline,
@@ -296,6 +333,7 @@ pub fn plan(input: &PlanInput) -> Result<Plan, EscrowError> {
             plan.call(custody_transfer(job.account_id, seed, payee, amount));
             plan.timestamp_window(deadline..);
         }
+        Instruction::VerifyJob => unreachable!("handled with the caller check"),
         Instruction::Return => {
             let [provider, job] = accounts(input)?;
             signed(provider)?;
@@ -359,8 +397,11 @@ pub fn apply(input: &ApplyInput) -> Result<ShardData, EscrowError> {
             job.state = JobState::Claimed;
             job
         }
-        Effect::Release => {
+        Effect::Release { buyer } => {
             let mut job = load(&input.pre_data)?;
+            if job.buyer != buyer {
+                return Err(EscrowError::WrongParty);
+            }
             if !matches!(job.state, JobState::Open | JobState::Delivered) {
                 return Err(EscrowError::WrongState);
             }
@@ -368,12 +409,13 @@ pub fn apply(input: &ApplyInput) -> Result<ShardData, EscrowError> {
             job
         }
         Effect::Refund {
+            buyer,
             payee,
             amount,
             deadline,
         } => {
             let mut job = load(&input.pre_data)?;
-            if job.refund_to != payee {
+            if job.buyer != buyer || job.refund_to != payee {
                 return Err(EscrowError::WrongParty);
             }
             if job.amount != amount {
@@ -437,23 +479,6 @@ fn load(record: &[u8]) -> Result<Job, EscrowError> {
 fn own_shard(input: &PlanInput, job: &AccountMeta) -> Result<(), EscrowError> {
     if job.program_account_id == input.self_account_id {
         Ok(())
-    } else {
-        Err(EscrowError::WrongJobAccount)
-    }
-}
-
-/// Checks that `job` is the job account for `buyer` and `job_ref`, selecting this program's
-/// shard, and returns its PDA seed.
-fn job_account(
-    input: &PlanInput,
-    job: &AccountMeta,
-    buyer: AccountId,
-    job_ref: &Hash32,
-) -> Result<PdaSeed, EscrowError> {
-    own_shard(input, job)?;
-    let seed = job_seed(&buyer, job_ref);
-    if job.account_id == AccountId::for_public_pda(&input.self_account_id, &seed) {
-        Ok(seed)
     } else {
         Err(EscrowError::WrongJobAccount)
     }

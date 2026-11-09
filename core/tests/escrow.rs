@@ -93,8 +93,13 @@ fn open_locks_the_deposit_in_the_job_account_until_the_deadline() {
     let output = plan_with(vec![signer(BUYER), other(job())], &open()).expect("open plans");
 
     assert_eq!(
-        output.chained_calls,
-        vec![native_transfer(BUYER, job(), AMOUNT)]
+        output.chained_calls.first(),
+        Some(&native_transfer(BUYER, job(), AMOUNT))
+    );
+    assert_eq!(
+        output.chained_calls.len(),
+        2,
+        "the deposit, then the job check"
     );
     assert_eq!(output.timestamp_validity_window.start(), None);
     assert_eq!(output.timestamp_validity_window.end(), Some(DEADLINE));
@@ -123,13 +128,64 @@ fn open_needs_the_buyer_signature() {
     );
 }
 
+/// PROTOTYPE: `Open` proves the job account is the escrow's PDA for the job's seed by calling
+/// itself with that seed. LEZ only authorizes the job in that call when it is that PDA, public or
+/// private, which a plan can't check from the account id alone.
 #[test]
-fn open_refuses_a_job_account_not_derived_from_the_buyer_and_job_ref() {
-    let someone_elses = job_account_id(&PROGRAM, &PROVIDER, &JOB_REF);
+fn open_verifies_the_job_account_through_a_self_call() {
+    let output = plan_with(vec![signer(BUYER), other(job())], &open()).expect("open plans");
+    let verify = ChainedCall::new(
+        PROGRAM,
+        vec![ProgramShardSelector::new(job(), PROGRAM)],
+        &Instruction::VerifyJob,
+    )
+    .with_pda_seeds(vec![logos_escrow_core::job_seed(&BUYER, &JOB_REF)]);
+    assert!(
+        output.chained_calls.contains(&verify),
+        "{:?}",
+        output.chained_calls
+    );
+}
+
+fn verify_job(caller: Option<AccountId>, authorized: bool) -> Result<PlanOutput, EscrowError> {
+    let input = PlanInput {
+        self_account_id: PROGRAM,
+        caller_account_id: caller,
+        accounts: vec![AccountMeta::new(job(), authorized, PROGRAM)],
+        instruction_data: borsh::to_vec(&Instruction::VerifyJob).expect("serializes"),
+    };
+    plan(&input).map(|plan| plan.output().clone())
+}
+
+#[test]
+fn verify_job_passes_only_an_authorized_job_in_the_escrows_own_call() {
+    let ok = verify_job(Some(PROGRAM), true).expect("an authorized job passes");
+    assert!(ok.effects.is_empty() && ok.chained_calls.is_empty());
     assert_eq!(
-        plan_with(vec![signer(BUYER), other(someone_elses)], &open()).map(|_| ()),
+        verify_job(Some(PROGRAM), false).map(|_| ()),
         Err(EscrowError::WrongJobAccount)
     );
+    assert_eq!(
+        verify_job(None, true).map(|_| ()),
+        Err(EscrowError::NotDirect)
+    );
+    assert_eq!(
+        verify_job(Some(AccountId::new([8; 32])), true).map(|_| ()),
+        Err(EscrowError::NotDirect)
+    );
+}
+
+#[test]
+fn only_the_jobs_buyer_can_release_or_refund_it() {
+    let stranger = AccountId::new([5; 32]);
+    let release = plan_with(vec![signer(stranger), other(job())], &release()).expect("plans");
+    assert_eq!(apply_to(&release, &opened()), Err(EscrowError::WrongParty));
+    let refund = plan_with(
+        vec![signer(stranger), other(job()), other(REFUND_TO)],
+        &refund(),
+    )
+    .expect("plans");
+    assert_eq!(apply_to(&refund, &opened()), Err(EscrowError::WrongParty));
 }
 
 #[test]
@@ -508,29 +564,6 @@ fn the_job_account_and_instruction_layout_are_stable() {
         "030909090909090909090909090909090909090909090909090909090909090909"
     );
     assert_eq!(hex(&borsh::to_vec(&give_back()).expect("serializes")), "05");
-}
-
-#[test]
-fn every_payout_needs_the_job_account_of_the_buyer_and_job_ref() {
-    let someone_elses = job_account_id(&PROGRAM, &PROVIDER, &JOB_REF);
-    let calls = [
-        (
-            vec![signer(PROVIDER), other(someone_elses), other(PAY_TO)],
-            claim(),
-        ),
-        (vec![signer(BUYER), other(someone_elses)], release()),
-        (
-            vec![signer(BUYER), other(someone_elses), other(REFUND_TO)],
-            refund(),
-        ),
-    ];
-    for (accounts, instruction) in calls {
-        assert_eq!(
-            plan_with(accounts, &instruction).map(|_| ()),
-            Err(EscrowError::WrongJobAccount),
-            "{instruction:?}"
-        );
-    }
 }
 
 #[test]
