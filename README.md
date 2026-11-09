@@ -9,18 +9,19 @@ Built for agent services in [logos-mcp](https://github.com/drptbl/logos-mcp), bu
 | Network | Value |
 | --- | --- |
 | Sequencer | `https://testnet.lez.logos.co/` (LEZ `v0.3.1`) |
-| Program id (header account) | `9jbUSu3t3rdZbmekKJ73DCwaFULWUWhPVVUbbgzdUgNL` |
-| Program id, hex | `81c6de4e3a4ba0d4694d8c225782952e012ccf8746ac77fe1535ec948928d729` |
-| Image id | `83b695c12eb5204777a1638b9506330e28264769545e9b0c2ebab35192473dfa` |
+| Program id (header account) | `HpavNGFYxjyhLsy171aXsvv146yUeXmRWiho22uvT43d` |
+| Program id, hex | `f9eba477278c918fadafbcb4a6463e947d0fd8de344b5431ee0aa3cd41d7e3a4` |
+| Image id | `1d6461792a0ca794bb2e6d76460237acef8559e24d9e3d44570662362801a789` |
 | Immutable | yes, checked on chain |
-| Deployed | 2026-11-08, blocks 79211 to 79214, header tx `f048321589a015d4d629328f1d183c0a860a77ad53358f4936f9736a9fca246d` |
+| Deployed | 2026-11-09, blocks 79270 to 79276, header tx `b538ab5e3a3da9f5d0685145af496b69b921dea30165c9e2c3e317bd74b1fcb7` |
 
 The program id is the account the program was deployed at, not the image id. Pass it as `program_id_hex` to `lez_core`.
 
 The deployed binary is immutable. A fix means a new deploy at a new program id, and jobs already open finish on the old one.
 
-It replaces two earlier deploys, which still run, so jobs already open there finish there. Don't open new jobs on them:
+It replaces three earlier deploys, which still run, so jobs already open there finish there. Don't open new jobs on them:
 
+- `9jbUSu3t3rdZbmekKJ73DCwaFULWUWhPVVUbbgzdUgNL` has no payout addresses and pays by push, so it can't serve private parties safely.
 - `CAZ8AvrdAeZ4rQjHqhAucqSLqrMK8TFQ7Z8b2jg5Sb4G` has no `Return`.
 - `4gCJP2bc5YBCh3saEzudfTmNYZ4uZNDj8fUea4wsHrEM` also takes calls from other programs. LEZ `v0.3.1` carries a signer's authorization into chained calls, so any program a buyer or provider signs for could drive it.
 
