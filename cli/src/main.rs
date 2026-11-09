@@ -77,7 +77,8 @@ enum Command {
     /// Print a job's record and the balance it holds.
     Show(JobArgs),
     /// Make a fresh private payout address under one of the wallet's private accounts' keys.
-    /// Prints the account id to use in `open`, and writes the file a payer needs to `--out`.
+    /// Prints the account id to use in `open`, and writes its key file to `--out`. Keep that file:
+    /// claiming or refunding to a fresh address needs it.
     PayoutAddress {
         /// The wallet's private account whose keys own the address.
         #[arg(long)]
@@ -208,7 +209,14 @@ async fn main() -> Result<()> {
                 vpk: found.key_chain.viewing_public_key.clone(),
                 identifier: wallet::cli::identifier_or_random(None),
             };
-            std::fs::write(&out, address.to_file())?;
+            // The identifier exists only in this file, and a fresh address can't be claimed to
+            // without it, so never overwrite another job's address.
+            let mut file = std::fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&out)
+                .with_context(|| format!("create {} (it must not exist yet)", out.display()))?;
+            std::io::Write::write_all(&mut file, address.to_file().as_bytes())?;
             println!("{}", address.account_id());
         }
         Command::Open {
@@ -255,6 +263,8 @@ async fn main() -> Result<()> {
             escrow.send(&job, accounts, &instruction).await?;
         }
         Command::Claim(payout) => {
+            // Sync first, so a payout address someone already paid into is used as the wallet's own.
+            escrow.wallet.sync_to_latest_block().await?;
             let record = escrow.record(&payout.job).await?;
             let instruction = Instruction::Claim {
                 buyer: payout.job.buyer,
@@ -275,6 +285,7 @@ async fn main() -> Result<()> {
             escrow.send(&job, accounts, &instruction).await?;
         }
         Command::Refund(payout) => {
+            escrow.wallet.sync_to_latest_block().await?;
             let record = escrow.record(&payout.job).await?;
             let instruction = Instruction::Refund {
                 job_ref: payout.job.job_ref,
@@ -483,11 +494,10 @@ mod tests {
         }
     }
 
-    fn written(text: &str) -> PathBuf {
+    fn written(name: &str, text: &str) -> PathBuf {
         let path = std::env::temp_dir().join(format!(
-            "logos-escrow-test-{}-{}.addr",
-            std::process::id(),
-            text.len()
+            "logos-escrow-test-{}-{name}.addr",
+            std::process::id()
         ));
         std::fs::write(&path, text).expect("write the address file");
         path
@@ -495,23 +505,20 @@ mod tests {
 
     #[test]
     fn a_payout_address_file_round_trips_to_the_same_account() {
-        let path = written(&address().to_file());
+        let path = written("round-trip", &address().to_file());
         let read = PayoutAddress::from_file(&path).expect("reads back");
         std::fs::remove_file(&path).ok();
         assert_eq!(read.account_id(), address().account_id());
         assert_eq!(read.identifier, address().identifier);
     }
 
+    /// Computed independently: SHA-256 of the 32-byte prefix, npk, vpk and identifier, with
+    /// Python's `hashlib`.
     #[test]
     fn the_address_is_the_lez_private_account_id_of_its_keys() {
-        let address = address();
         assert_eq!(
-            address.account_id(),
-            AccountId::for_private_account(
-                &address.npk,
-                &address.vpk,
-                &PrivateAccountKind::Regular(address.identifier)
-            )
+            address().account_id().to_string(),
+            "9aook7Yh6sHfiPGHwWS2AG3HEhbKZAtaWj8TryeZRfhv"
         );
     }
 
@@ -523,7 +530,7 @@ mod tests {
             .take(2)
             .map(|line| format!("{line}\n"))
             .collect();
-        let path = written(&two_lines);
+        let path = written("truncated", &two_lines);
         let read = PayoutAddress::from_file(&path);
         std::fs::remove_file(&path).ok();
         assert!(read.is_err());
