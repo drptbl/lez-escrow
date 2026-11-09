@@ -712,3 +712,55 @@ fn open_refuses_the_job_account_as_a_payout_address() {
         );
     }
 }
+
+/// The job record after the provider claimed it.
+fn claimed() -> ShardData {
+    let output = plan_with(
+        vec![signer(PROVIDER), other(job()), other(PAY_TO)],
+        &claim(),
+    )
+    .expect("plans");
+    apply_to(&output, &delivered()).expect("claim applies")
+}
+
+/// The job record after the buyer refunded it.
+fn refunded() -> ShardData {
+    let at_once = Instruction::Refund {
+        job_ref: JOB_REF,
+        amount: AMOUNT,
+        deadline: 0,
+    };
+    let output = plan_with(
+        vec![signer(BUYER), other(job()), other(REFUND_TO)],
+        &at_once,
+    )
+    .expect("plans");
+    apply_to(&output, &returned()).expect("refund applies")
+}
+
+#[test]
+fn a_finished_or_returned_job_cannot_be_released() {
+    let output = plan_with(release_accounts(), &release()).expect("plans");
+    for record in [claimed(), refunded(), returned()] {
+        assert_eq!(apply_to(&output, &record), Err(EscrowError::WrongState));
+    }
+}
+
+#[test]
+fn a_finished_job_cannot_be_refunded_again() {
+    let output = plan_with(
+        vec![signer(BUYER), other(job()), other(REFUND_TO)],
+        &refund(),
+    )
+    .expect("plans");
+    for record in [claimed(), refunded()] {
+        assert_eq!(apply_to(&output, &record), Err(EscrowError::WrongState));
+    }
+}
+
+#[test]
+fn a_two_account_claim_pays_only_a_provider_that_is_its_own_pay_to() {
+    let claim = plan_with(vec![signer(PROVIDER), other(job())], &claim()).expect("plans");
+    assert_eq!(claim.chained_calls, vec![payout(PROVIDER)]);
+    assert_eq!(apply_to(&claim, &delivered()), Err(EscrowError::WrongParty));
+}
