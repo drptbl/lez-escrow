@@ -1,0 +1,60 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    # bash -eo pipefail, so a failing command before a pipe fails the step.
+    shell: bash
+
+env:
+  CARGO_TERM_COLOR: always
+  # The RISC Zero version LEZ v0.3.1 pins.
+  RISC0_VERSION: 3.0.5
+
+jobs:
+  check:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # Needed to build the LEZ wallet crate the CLI depends on.
+      - run: sudo apt-get update && sudo apt-get install -y clang libclang-dev pkg-config libssl-dev libpcsclite-dev
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+      - run: cargo fmt --all --check
+      - run: cargo clippy --workspace --all-targets -- -D warnings
+      - run: cargo test -p logos_escrow_core
+
+  guest:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - run: sudo apt-get update && sudo apt-get install -y clang libclang-dev pkg-config libssl-dev libpcsclite-dev
+      - name: Install RISC Zero
+        run: |
+          mkdir -p "$HOME/.risc0/bin"
+          curl -fsSL https://artifacts.risczero.net/rzup/prod/Linux-X64/rzup -o "$HOME/.risc0/bin/rzup"
+          chmod +x "$HOME/.risc0/bin/rzup"
+          echo "$HOME/.risc0/bin" >> "$GITHUB_PATH"
+          "$HOME/.risc0/bin/rzup" install cargo-risczero "$RISC0_VERSION"
+          "$HOME/.risc0/bin/rzup" install r0vm "$RISC0_VERSION"
+          # risc0-build checks for this toolchain even when it builds in Docker.
+          "$HOME/.risc0/bin/rzup" install rust
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+      - name: Build the guest
+        run: make build | tee build.log
+      # The README records the deployed program's image id. A different one means
+      # the source no longer builds the program that is on chain.
+      - name: Check the image id matches the deployed program
+        run: |
+          built=$(grep -o 'ImageID: [0-9a-f]*' build.log | cut -d' ' -f2)
+          deployed=$(grep -o '| Image id | `[0-9a-f]*`' README.md | grep -o '[0-9a-f]\{64\}')
+          echo "built    $built"
+          echo "deployed $deployed"
+          test -n "$built" && test "$built" = "$deployed"
+      - run: cargo test -p logos_escrow_integration
