@@ -1,0 +1,55 @@
+name: release
+
+# A pushed `v*` tag builds the guest and publishes it, with its sha256, as a GitHub Release.
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+defaults:
+  run:
+    shell: bash
+
+env:
+  RISC0_VERSION: 3.0.5
+
+jobs:
+  release:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Install RISC Zero
+        run: |
+          mkdir -p "$HOME/.risc0/bin"
+          curl -fsSL https://artifacts.risczero.net/rzup/prod/Linux-X64/rzup -o "$HOME/.risc0/bin/rzup"
+          chmod +x "$HOME/.risc0/bin/rzup"
+          echo "$HOME/.risc0/bin" >> "$GITHUB_PATH"
+          "$HOME/.risc0/bin/rzup" install cargo-risczero "$RISC0_VERSION"
+          # risc0-build checks for this toolchain even when it builds in Docker.
+          "$HOME/.risc0/bin/rzup" install rust
+      - name: Build the guest
+        run: make build | tee build.log
+      # Only the binary of the program that is on chain is published.
+      - name: Check the image id matches the deployed program
+        run: scripts/check-image-id.sh build.log
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cp methods/guest/target/riscv32im-risc0-zkvm-elf/docker/logos_escrow.bin .
+          sha256sum logos_escrow.bin > logos_escrow.bin.sha256
+          image=$(grep -o 'ImageID: [0-9a-f]*' build.log | cut -d' ' -f2)
+          program=$(grep -o '| Program id (header account) | `[A-Za-z0-9]*`' README.md | grep -o '`[A-Za-z0-9]*`' | tr -d '`')
+          cat > notes.md <<NOTES
+          The escrow program as deployed on the LEZ \`v0.3.1\` testnet.
+
+          - program id: \`$program\`
+          - image id: \`$image\`
+          - sha256: \`$(cut -d' ' -f1 logos_escrow.bin.sha256)\`
+
+          Built from this tag in RISC Zero's Docker image \`r0.1.91.1\` with \`make build\`. The same command reproduces it.
+          NOTES
+          gh release create "$GITHUB_REF_NAME" logos_escrow.bin logos_escrow.bin.sha256 \
+            --title "$GITHUB_REF_NAME" --notes-file notes.md --verify-tag

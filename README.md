@@ -19,6 +19,8 @@ The program id is the account the program was deployed at, not the image id. Pas
 
 The deployed binary is immutable. A fix means a new deploy at a new program id, and jobs already open finish on the old one.
 
+Each release on GitHub carries this binary, `logos_escrow.bin`, and its sha256, built from the release tag in CI. A release only publishes when the build's image id is the one above, so you can deploy the same program to a local chain.
+
 It replaces three earlier deploys, which still run, so jobs already open there finish there. Don't open new jobs on them:
 
 - `9jbUSu3t3rdZbmekKJ73DCwaFULWUWhPVVUbbgzdUgNL` has no payout addresses and pays by push, so it can't serve private parties safely.
