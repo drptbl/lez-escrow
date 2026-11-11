@@ -48,13 +48,6 @@ jobs:
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
       - name: Build the guest
         run: make build | tee build.log
-      # The README records the deployed program's image id. A different one means
-      # the source no longer builds the program that is on chain.
       - name: Check the image id matches the deployed program
-        run: |
-          built=$(grep -o 'ImageID: [0-9a-f]*' build.log | cut -d' ' -f2)
-          deployed=$(grep -o '| Image id | `[0-9a-f]*`' README.md | grep -o '[0-9a-f]\{64\}')
-          echo "built    $built"
-          echo "deployed $deployed"
-          test -n "$built" && test "$built" = "$deployed"
+        run: scripts/check-image-id.sh build.log
       - run: cargo test -p logos_escrow_integration
