@@ -51,3 +51,10 @@ jobs:
       - name: Check the image id matches the deployed program
         run: scripts/check-image-id.sh build.log
       - run: cargo test -p logos_escrow_integration
+      # Every flow on a local chain, through the CLI and the LEZ wallet `lez_core` wraps, with
+      # public and private parties. Starts the devnet from logos-devnet.toml and exports its env.
+      - uses: drptbl/logos-devnet@3b34f9eb2427dfbffcd8087844a827cb689bb4aa # v0.3.4
+      - run: cargo test -p logos_escrow_cli --test devnet -- --ignored
+      - name: The sequencer's log
+        if: failure()
+        run: logos-devnet logs || true
