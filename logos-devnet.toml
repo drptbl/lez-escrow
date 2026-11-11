@@ -1,0 +1,14 @@
+# A local LEZ chain for the end-to-end test (`cli/tests/devnet.rs`), see
+# https://github.com/drptbl/logos-devnet. Build the guest first: `make build`.
+home = ".logos-devnet"
+
+[devnet]
+port = 3042      # its own port, next to a shared devnet on 3040
+dev_mode = true  # fake proofs, so a private call takes about a second
+
+[programs]
+escrow = { path = "methods/guest/target/riscv32im-risc0-zkvm-elf/docker/logos_escrow.bin", mutable = true }
+
+# 0 pays fees and funds private accounts, 1 is the buyer, 2 the provider.
+[accounts.parties]
+count = 3
