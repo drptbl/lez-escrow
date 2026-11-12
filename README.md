@@ -207,6 +207,13 @@ make test
 
 `make build` builds the guest in RISC Zero's Docker image `r0.1.91.1`, the one LEZ `v0.3.1` builds its own programs with, so the image id is reproducible. `methods/guest/Cargo.lock` is part of that identity too: change it and the image id changes. `make test` runs the program's rules as plain Rust, then the built binary through LEZ `v0.3.1`'s state machine with real signatures, transfers and deadlines. CI runs both, and fails when the build's image id isn't the deployed one above.
 
+`cli/tests/devnet.rs` runs every flow on a local chain from [logos-devnet](https://github.com/drptbl/logos-devnet), through the CLI and the same LEZ wallet `lez_core` wraps, with public and private parties. CI runs it too:
+
+```bash
+make build && logos-devnet up && source .logos-devnet/env
+cargo test -p logos_escrow_cli --test devnet -- --ignored
+```
+
 `cli/` is a small client on the same wallet code `lez_core` uses. A call goes private when the signer is one of the wallet's private accounts or the payee is a private payout address:
 
 ```bash
