@@ -3,6 +3,7 @@
 home = ".logos-devnet"
 
 [devnet]
+lez = "v0.3.1"   # the LEZ release the program is built for and the testnet runs
 port = 3042      # its own port, next to a shared devnet on 3040
 dev_mode = true  # fake proofs, so a private call takes about a second
 
