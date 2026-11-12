@@ -48,14 +48,18 @@ impl Devnet {
         for file in ["wallet_config.json", "storage.json"] {
             std::fs::copy(group.join(file), home.join(file)).expect("copy the group wallet");
         }
-        let accounts = std::fs::read_to_string(env("LOGOS_DEVNET_ACCOUNTS_PARTIES"))
-            .expect("read the account group");
-        let ids: Vec<AccountId> = accounts
-            .split("\"id\": \"")
-            .skip(1)
-            .map(|rest| {
-                rest.split('"')
-                    .next()
+        let accounts: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(env("LOGOS_DEVNET_ACCOUNTS_PARTIES"))
+                .expect("read the account group"),
+        )
+        .expect("the account group is JSON");
+        let ids: Vec<AccountId> = accounts["accounts"]
+            .as_array()
+            .expect("an accounts list")
+            .iter()
+            .map(|account| {
+                account["id"]
+                    .as_str()
                     .expect("an id")
                     .parse()
                     .expect("a base58 id")

@@ -4939,6 +4939,7 @@ dependencies = [
  "lee",
  "lee_core",
  "logos_escrow_core",
+ "serde_json",
  "tokio",
  "wallet",
 ]
