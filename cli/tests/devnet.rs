@@ -17,14 +17,18 @@ use lee_core::{
     account::{AccountId, Balance},
     encryption::ViewingPublicKey,
 };
+use logos_escrow_core::{Instruction, job_account_id};
 use wallet::{
-    AccountIdentity, WalletCore, program_facades::native_token_transfer::NativeTokenTransfer,
+    AccountIdentity, AccountMention, WalletCore,
+    program_facades::native_token_transfer::NativeTokenTransfer,
 };
 
 const AMOUNT: Balance = 1_000_000;
 
 struct Devnet {
     program: String,
+    /// The test-only controller, which relays whatever escrow call it is given.
+    controller: AccountId,
     home: PathBuf,
     payer: AccountId,
     buyer: AccountId,
@@ -70,6 +74,9 @@ impl Devnet {
         };
         Self {
             program: env("LOGOS_PROGRAM_ESCROW"),
+            controller: env("LOGOS_PROGRAM_TEST_CONTROLLER")
+                .parse()
+                .expect("a base58 program id"),
             home,
             payer,
             buyer,
@@ -136,6 +143,37 @@ impl Devnet {
             path.to_str().expect("utf-8"),
         ]);
         (id.trim().to_owned(), path)
+    }
+
+    /// Has the controller make one escrow call; the payer signs and pays, so no party does.
+    async fn relay(&self, accounts: &[AccountId], instruction: &Instruction) {
+        let program: AccountId = self.program.parse().expect("a base58 program id");
+        let mentions = accounts
+            .iter()
+            .map(|id| AccountMention {
+                identity: AccountIdentity::PublicNoSign(*id),
+                program_account_id: self.controller,
+            })
+            .collect();
+        let relay = (
+            program,
+            Vec::<[u8; 32]>::new(),
+            borsh::to_vec(instruction).expect("instruction serializes"),
+        );
+        let wallet = self.wallet();
+        let hash = wallet
+            .send_pub_tx_paid_by(
+                mentions,
+                borsh::to_vec(&relay).expect("relay serializes"),
+                self.controller,
+                Some(self.payer),
+            )
+            .await
+            .expect("send the relay");
+        wallet
+            .poll_transaction(hash)
+            .await
+            .expect("the relay lands");
     }
 
     async fn public_balance(&self, id: AccountId) -> Balance {
@@ -237,7 +275,7 @@ async fn every_flow_settles_on_a_devnet() {
             "--job-ref",
             &job
         ]),
-        "Claimed"
+        "Delivered"
     );
     assert_eq!(
         devnet.public_balance(devnet.provider).await,
@@ -281,6 +319,77 @@ async fn every_flow_settles_on_a_devnet() {
         "Refunded"
     );
     assert_eq!(devnet.public_balance(devnet.buyer).await, before);
+
+    // A controlled job: the buyer and the controller each release a part, the provider claims
+    // both, the controller returns the rest and the buyer refunds it.
+    let job = job_ref();
+    let controller = devnet.controller.to_string();
+    let (provider_before, buyer_before) = (
+        devnet.public_balance(devnet.provider).await,
+        devnet.public_balance(devnet.buyer).await,
+    );
+    let open = [
+        "--payer",
+        &payer,
+        "open",
+        "--buyer",
+        &buyer,
+        "--job-ref",
+        &job,
+        "--provider",
+        &provider,
+        "--pay-to",
+        &provider,
+        "--refund-to",
+        &buyer,
+        "--amount",
+        &amount,
+        "--in-secs",
+        "600",
+        "--controller",
+        &controller,
+    ];
+    assert_eq!(devnet.call(&open), "Open");
+    let job_args = ["--buyer", buyer.as_str(), "--job-ref", job.as_str()];
+    let as_party = |command: &str, extra: &[&str]| -> String {
+        let args: Vec<&str> = ["--payer", payer.as_str(), command]
+            .into_iter()
+            .chain(job_args)
+            .chain(extra.iter().copied())
+            .collect();
+        devnet.call(&args)
+    };
+    // Delivering a controlled job releases nothing.
+    assert_eq!(as_party("deliver", &["--result", &job]), "Open");
+    let part = (AMOUNT / 4).to_string();
+    assert_eq!(as_party("release", &["--amount", &part]), "Open");
+    let job_account = job_account_id(
+        &devnet.program.parse().expect("a program id"),
+        &devnet.buyer,
+        &<[u8; 32]>::try_from(hex::decode(&job).expect("hex")).expect("32 bytes"),
+    );
+    devnet
+        .relay(
+            &[devnet.buyer, job_account],
+            &Instruction::Release {
+                job_ref: <[u8; 32]>::try_from(hex::decode(&job).expect("hex")).expect("32 bytes"),
+                amount: AMOUNT / 4,
+            },
+        )
+        .await;
+    assert_eq!(as_party("claim", &[]), "Open");
+    devnet
+        .relay(&[devnet.provider, job_account], &Instruction::Return)
+        .await;
+    assert_eq!(as_party("refund", &[]), "Refunded");
+    assert_eq!(
+        devnet.public_balance(devnet.provider).await,
+        provider_before + AMOUNT / 2
+    );
+    assert_eq!(
+        devnet.public_balance(devnet.buyer).await,
+        buyer_before - AMOUNT / 2
+    );
 
     // Private parties, funded by a shielded transfer.
     let mut wallet = devnet.wallet();
@@ -340,7 +449,7 @@ async fn every_flow_settles_on_a_devnet() {
         match flow {
             "claim" => {
                 assert_eq!(call(with("deliver", &["--result", &job])), "Delivered");
-                assert_eq!(call(with("claim", &pay)), "Claimed");
+                assert_eq!(call(with("claim", &pay)), "Delivered");
                 assert_eq!(devnet.private_balance(&pay_to).await, AMOUNT);
             }
             "return" => {
@@ -349,8 +458,8 @@ async fn every_flow_settles_on_a_devnet() {
                 assert_eq!(devnet.private_balance(&refund_to).await, AMOUNT);
             }
             "release" => {
-                assert_eq!(call(with("release", &[])), "Released");
-                assert_eq!(call(with("claim", &pay)), "Claimed");
+                assert_eq!(call(with("release", &[])), "Open");
+                assert_eq!(call(with("claim", &pay)), "Open");
                 assert_eq!(devnet.private_balance(&pay_to).await, AMOUNT);
             }
             _ => {
@@ -385,7 +494,7 @@ async fn every_flow_settles_on_a_devnet() {
                     .expect("the transfer lands");
                 drop(wallet);
                 assert_eq!(call(with("deliver", &["--result", &job])), "Delivered");
-                assert_eq!(call(with("claim", &pay)), "Claimed");
+                assert_eq!(call(with("claim", &pay)), "Delivered");
                 assert_eq!(devnet.private_balance(&pay_to).await, AMOUNT + 1);
             }
         }

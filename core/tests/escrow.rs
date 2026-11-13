@@ -81,6 +81,7 @@ fn open() -> Instruction {
         refund_to: REFUND_TO,
         amount: AMOUNT,
         deadline: DEADLINE,
+        controller: None,
     }
 }
 
@@ -108,9 +109,12 @@ fn open_locks_the_deposit_in_the_job_account_until_the_deadline() {
             pay_to: PAY_TO,
             refund_to: REFUND_TO,
             amount: AMOUNT,
+            released: 0,
+            claimed: 0,
             deadline: DEADLINE,
-            result: None,
             state: JobState::Open,
+            result: None,
+            controller: None,
         }
     );
 }
@@ -118,7 +122,10 @@ fn open_locks_the_deposit_in_the_job_account_until_the_deadline() {
 #[test]
 fn open_needs_the_buyer_signature() {
     assert_eq!(
-        plan_with(vec![other(BUYER), other(job())], &open()).map(|_| ()),
+        apply_to(
+            &plan_with(vec![other(BUYER), other(job())], &open()).expect("plans"),
+            &[]
+        ),
         Err(EscrowError::Unauthorized)
     );
 }
@@ -149,6 +156,7 @@ fn open_refuses_terms_that_cannot_settle() {
         refund_to: REFUND_TO,
         amount: 0,
         deadline: DEADLINE,
+        controller: None,
     };
     let self_dealing = Instruction::Open {
         job_ref: JOB_REF,
@@ -157,6 +165,7 @@ fn open_refuses_terms_that_cannot_settle() {
         refund_to: REFUND_TO,
         amount: AMOUNT,
         deadline: DEADLINE,
+        controller: None,
     };
     assert_eq!(
         plan_with(accounts(), &zero).map(|_| ()),
@@ -201,9 +210,12 @@ fn deliver_records_the_result_hash_before_the_deadline() {
             pay_to: PAY_TO,
             refund_to: REFUND_TO,
             amount: AMOUNT,
+            released: AMOUNT,
+            claimed: 0,
             deadline: DEADLINE,
-            result: Some(RESULT),
             state: JobState::Delivered,
+            result: Some(RESULT),
+            controller: None,
         }
     );
 }
@@ -211,7 +223,10 @@ fn deliver_records_the_result_hash_before_the_deadline() {
 #[test]
 fn only_the_named_provider_can_deliver() {
     assert_eq!(
-        plan_with(vec![other(PROVIDER), other(job())], &deliver()).map(|_| ()),
+        apply_to(
+            &plan_with(vec![other(PROVIDER), other(job())], &deliver()).expect("plans"),
+            &opened()
+        ),
         Err(EscrowError::Unauthorized)
     );
     let stranger = AccountId::new([5; 32]);
@@ -274,14 +289,18 @@ fn the_provider_claims_a_delivered_job() {
 
     let record = apply_to(&output, &delivered()).expect("claim applies to a delivered job");
     let job = decode(&record);
-    assert_eq!(job.state, JobState::Claimed);
+    assert_eq!((job.state, job.claimed), (JobState::Delivered, AMOUNT));
     assert_eq!(job.result, Some(RESULT));
 }
 
 #[test]
 fn only_the_named_provider_can_claim() {
     assert_eq!(
-        plan_with(vec![other(PROVIDER), other(job()), other(PAY_TO)], &claim()).map(|_| ()),
+        apply_to(
+            &plan_with(vec![other(PROVIDER), other(job()), other(PAY_TO)], &claim())
+                .expect("plans"),
+            &delivered()
+        ),
         Err(EscrowError::Unauthorized)
     );
     let stranger = AccountId::new([5; 32]);
@@ -296,35 +315,73 @@ fn only_the_named_provider_can_claim() {
     );
 }
 
-#[test]
-fn claim_pays_exactly_the_locked_amount() {
-    let more = Instruction::Claim {
+fn claim_of(amount: u128) -> Instruction {
+    Instruction::Claim {
         buyer: BUYER,
         job_ref: JOB_REF,
-        amount: AMOUNT + 1,
+        amount,
+    }
+}
+
+#[test]
+fn claim_pays_any_part_of_what_is_released_and_unclaimed() {
+    let release = plan_with(release_accounts(), &release_of(200)).expect("plans");
+    let after_release = apply_to(&release, &opened()).expect("release applies");
+    let claim = |amount: u128| {
+        plan_with(
+            vec![signer(PROVIDER), other(job()), other(PAY_TO)],
+            &claim_of(amount),
+        )
+        .expect("claim plans")
     };
-    let output =
-        plan_with(vec![signer(PROVIDER), other(job()), other(PAY_TO)], &more).expect("plans");
+
+    let part = claim(150);
     assert_eq!(
-        apply_to(&output, &delivered()),
-        Err(EscrowError::WrongAmount)
+        part.chained_calls,
+        vec![
+            native_transfer(job(), PAY_TO, 150)
+                .with_pda_seeds(vec![logos_escrow_core::job_seed(&BUYER, &JOB_REF)])
+        ]
+    );
+    let after_part = apply_to(&part, &after_release).expect("a partial claim applies");
+    assert_eq!(decode(&after_part).claimed, 150);
+
+    for too_much in [0, 51, u128::MAX] {
+        assert_eq!(
+            apply_to(&claim(too_much), &after_part),
+            Err(EscrowError::WrongAmount),
+            "{too_much}"
+        );
+    }
+    let rest = decode(&apply_to(&claim(50), &after_part).expect("the rest applies"));
+    assert_eq!(
+        (rest.state, rest.released, rest.claimed),
+        (JobState::Open, 200, 200)
     );
 }
 
 #[test]
-fn claim_needs_a_delivered_job() {
+fn claim_needs_something_released() {
     let output = plan_with(
         vec![signer(PROVIDER), other(job()), other(PAY_TO)],
         &claim(),
     )
     .expect("plans");
     let claimed = apply_to(&output, &delivered()).expect("first claim applies");
-    assert_eq!(apply_to(&output, &opened()), Err(EscrowError::WrongState));
-    assert_eq!(apply_to(&output, &claimed), Err(EscrowError::WrongState));
+    assert_eq!(apply_to(&output, &opened()), Err(EscrowError::WrongAmount));
+    assert_eq!(apply_to(&output, &claimed), Err(EscrowError::WrongAmount));
 }
 
+fn release_of(amount: u128) -> Instruction {
+    Instruction::Release {
+        job_ref: JOB_REF,
+        amount,
+    }
+}
+
+/// Releases everything.
 fn release() -> Instruction {
-    Instruction::Release { job_ref: JOB_REF }
+    release_of(AMOUNT)
 }
 
 fn release_accounts() -> Vec<AccountMeta> {
@@ -332,25 +389,61 @@ fn release_accounts() -> Vec<AccountMeta> {
 }
 
 #[test]
-fn release_marks_an_open_or_delivered_job_payable_without_moving_money() {
-    let output = plan_with(release_accounts(), &release()).expect("release plans");
+fn release_lets_the_provider_claim_part_of_an_open_job_without_moving_money() {
+    let output = plan_with(release_accounts(), &release_of(200)).expect("release plans");
 
     assert!(output.chained_calls.is_empty());
     assert_eq!(output.timestamp_validity_window.end(), None);
 
+    let once = apply_to(&output, &opened()).expect("applies");
+    let job = decode(&once);
     assert_eq!(
-        decode(&apply_to(&output, &opened()).expect("applies")).state,
-        JobState::Released
+        (job.state, job.released, job.claimed),
+        (JobState::Open, 200, 0)
     );
-    let after_delivery = decode(&apply_to(&output, &delivered()).expect("applies"));
-    assert_eq!(after_delivery.state, JobState::Released);
-    assert_eq!(after_delivery.result, Some(RESULT));
+    let twice = decode(&apply_to(&output, &once).expect("applies again"));
+    assert_eq!((twice.state, twice.released), (JobState::Open, 400));
+}
+
+#[test]
+fn release_cannot_exceed_what_is_left() {
+    let two_hundred = plan_with(release_accounts(), &release_of(200)).expect("plans");
+    let after_400 = apply_to(
+        &two_hundred,
+        &apply_to(&two_hundred, &opened()).expect("applies"),
+    )
+    .expect("applies");
+    for too_much in [0, 101, u128::MAX] {
+        let output = plan_with(release_accounts(), &release_of(too_much)).expect("plans");
+        assert_eq!(
+            apply_to(&output, &after_400),
+            Err(EscrowError::WrongAmount),
+            "{too_much}"
+        );
+    }
+    let the_rest = plan_with(release_accounts(), &release_of(100)).expect("plans");
+    assert_eq!(
+        decode(&apply_to(&the_rest, &after_400).expect("applies")).released,
+        AMOUNT
+    );
+}
+
+#[test]
+fn a_delivered_job_has_nothing_left_to_release() {
+    let output = plan_with(release_accounts(), &release_of(1)).expect("plans");
+    assert_eq!(
+        apply_to(&output, &delivered()),
+        Err(EscrowError::WrongState)
+    );
 }
 
 #[test]
 fn release_needs_the_buyer_signature() {
     assert_eq!(
-        plan_with(vec![other(BUYER), other(job())], &release()).map(|_| ()),
+        apply_to(
+            &plan_with(vec![other(BUYER), other(job())], &release()).expect("plans"),
+            &opened()
+        ),
         Err(EscrowError::Unauthorized)
     );
 }
@@ -362,12 +455,6 @@ fn released() -> ShardData {
 }
 
 #[test]
-fn a_released_job_cannot_be_released_again() {
-    let output = plan_with(release_accounts(), &release()).expect("plans");
-    assert_eq!(apply_to(&output, &released()), Err(EscrowError::WrongState));
-}
-
-#[test]
 fn the_provider_claims_a_released_job_to_its_pay_to() {
     let output = plan_with(
         vec![signer(PROVIDER), other(job()), other(PAY_TO)],
@@ -375,10 +462,8 @@ fn the_provider_claims_a_released_job_to_its_pay_to() {
     )
     .expect("claim plans");
     assert_eq!(output.chained_calls, vec![payout(PAY_TO)]);
-    assert_eq!(
-        decode(&apply_to(&output, &released()).expect("applies")).state,
-        JobState::Claimed
-    );
+    let job = decode(&apply_to(&output, &released()).expect("applies"));
+    assert_eq!((job.state, job.claimed), (JobState::Open, AMOUNT));
 }
 
 fn refund() -> Instruction {
@@ -409,12 +494,13 @@ fn the_buyer_takes_back_an_undelivered_job_from_the_deadline_on() {
 
 #[test]
 fn refund_needs_the_buyer_signature() {
+    let unsigned = plan_with(
+        vec![other(BUYER), other(job()), other(REFUND_TO)],
+        &refund(),
+    )
+    .expect("plans");
     assert_eq!(
-        plan_with(
-            vec![other(BUYER), other(job()), other(REFUND_TO)],
-            &refund()
-        )
-        .map(|_| ()),
+        apply_to(&unsigned, &opened()),
         Err(EscrowError::Unauthorized)
     );
 }
@@ -500,12 +586,17 @@ fn the_job_account_and_instruction_layout_are_stable() {
             "0303030303030303030303030303030303030303030303030303030303030303",
             "0606060606060606060606060606060606060606060606060606060606060606",
             "f4010000000000000000000000000000",
-            "00505c18a3010000"
+            "00505c18a3010000",
+            "00"
         )
     );
     assert_eq!(
         hex(&borsh::to_vec(&release()).expect("serializes")),
-        "030909090909090909090909090909090909090909090909090909090909090909"
+        concat!(
+            "03",
+            "0909090909090909090909090909090909090909090909090909090909090909",
+            "f4010000000000000000000000000000"
+        )
     );
     assert_eq!(hex(&borsh::to_vec(&give_back()).expect("serializes")), "05");
 }
@@ -533,23 +624,264 @@ fn every_payout_needs_the_job_account_of_the_buyer_and_job_ref() {
     }
 }
 
-#[test]
-fn a_call_from_another_program_is_refused() {
-    // LEZ carries a signer's authorization into chained calls, so a program the buyer signs
-    // for could otherwise act on the buyer's jobs.
-    let chained = PlanInput {
-        self_account_id: PROGRAM,
-        caller_account_id: Some(AccountId::new([8; 32])),
-        accounts: vec![signer(BUYER), other(job())],
-        instruction_data: borsh::to_vec(&open()).expect("instruction serializes"),
-    };
-    assert_eq!(plan(&chained).map(|_| ()), Err(EscrowError::NotDirect));
+/// The program a controlled job names, and one it doesn't.
+const CONTROLLER: AccountId = AccountId::new([8; 32]);
+const OTHER_PROGRAM: AccountId = AccountId::new([10; 32]);
 
-    let direct = PlanInput {
-        caller_account_id: None,
-        ..chained
+/// Plans `instruction` as a chained call from `caller`.
+fn plan_from(
+    caller: AccountId,
+    accounts: Vec<AccountMeta>,
+    instruction: &Instruction,
+) -> Result<PlanOutput, EscrowError> {
+    let input = PlanInput {
+        self_account_id: PROGRAM,
+        caller_account_id: Some(caller),
+        accounts,
+        instruction_data: borsh::to_vec(instruction).expect("instruction serializes"),
     };
-    assert!(plan(&direct).is_ok());
+    plan(&input).map(|plan| plan.output().clone())
+}
+
+fn open_controlled_by(controller: Option<AccountId>) -> Instruction {
+    Instruction::Open {
+        job_ref: JOB_REF,
+        provider: PROVIDER,
+        pay_to: PAY_TO,
+        refund_to: REFUND_TO,
+        amount: AMOUNT,
+        deadline: DEADLINE,
+        controller,
+    }
+}
+
+/// The job record right after the buyer opened it naming `CONTROLLER`.
+fn opened_controlled() -> ShardData {
+    let output = plan_with(
+        vec![signer(BUYER), other(job())],
+        &open_controlled_by(Some(CONTROLLER)),
+    )
+    .expect("open plans");
+    apply_to(&output, &[]).expect("open applies")
+}
+
+#[test]
+fn a_direct_open_may_name_any_controller() {
+    assert_eq!(decode(&opened_controlled()).controller, Some(CONTROLLER));
+}
+
+/// Literals from the borsh spec, for callers that decode a job record or encode `Open` with a
+/// controller themselves.
+#[test]
+fn the_job_record_and_controlled_open_layout_are_stable() {
+    let hex = |bytes: &[u8]| bytes.iter().map(|b| format!("{b:02x}")).collect::<String>();
+    assert_eq!(
+        hex(&opened_controlled()),
+        concat!(
+            "0101010101010101010101010101010101010101010101010101010101010101",
+            "0202020202020202020202020202020202020202020202020202020202020202",
+            "0303030303030303030303030303030303030303030303030303030303030303",
+            "0606060606060606060606060606060606060606060606060606060606060606",
+            "f4010000000000000000000000000000",
+            "00000000000000000000000000000000",
+            "00000000000000000000000000000000",
+            "00505c18a3010000",
+            "00",
+            "00",
+            "01",
+            "0808080808080808080808080808080808080808080808080808080808080808"
+        )
+    );
+    assert!(
+        hex(&borsh::to_vec(&open_controlled_by(Some(CONTROLLER))).expect("serializes")).ends_with(
+            "00505c18a3010000010808080808080808080808080808080808080808080808080808080808080808"
+        )
+    );
+}
+
+#[test]
+fn a_program_may_only_open_a_job_it_controls() {
+    let accounts = || vec![signer(BUYER), other(job())];
+    let itself = plan_from(
+        CONTROLLER,
+        accounts(),
+        &open_controlled_by(Some(CONTROLLER)),
+    )
+    .expect("plans");
+    assert_eq!(
+        itself.chained_calls,
+        vec![native_transfer(BUYER, job(), AMOUNT)]
+    );
+    assert_eq!(
+        decode(&apply_to(&itself, &[]).expect("applies")).controller,
+        Some(CONTROLLER)
+    );
+    for named in [None, Some(OTHER_PROGRAM)] {
+        let output = plan_from(CONTROLLER, accounts(), &open_controlled_by(named)).expect("plans");
+        assert_eq!(
+            apply_to(&output, &[]),
+            Err(EscrowError::NotDirect),
+            "{named:?}"
+        );
+    }
+}
+
+#[test]
+fn the_controller_releases_and_returns_without_the_parties() {
+    let release = plan_from(
+        CONTROLLER,
+        vec![other(BUYER), other(job())],
+        &release_of(200),
+    )
+    .expect("plans");
+    assert_eq!(
+        decode(&apply_to(&release, &opened_controlled()).expect("applies")).released,
+        200
+    );
+    let give_back = plan_from(
+        CONTROLLER,
+        vec![other(PROVIDER), other(job())],
+        &give_back(),
+    )
+    .expect("plans");
+    assert_eq!(
+        decode(&apply_to(&give_back, &opened_controlled()).expect("applies")).state,
+        JobState::Returned
+    );
+}
+
+#[test]
+fn a_program_cannot_act_on_a_job_it_does_not_control() {
+    let calls = [
+        (vec![other(BUYER), other(job())], release()),
+        (vec![other(PROVIDER), other(job())], give_back()),
+        (vec![signer(PROVIDER), other(job())], deliver()),
+        (vec![signer(PROVIDER), other(job()), other(PAY_TO)], claim()),
+        (
+            vec![signer(BUYER), other(job()), other(REFUND_TO)],
+            refund(),
+        ),
+    ];
+    for (accounts, instruction) in calls {
+        // Another program, on a controlled job and on one with no controller.
+        let output = plan_from(OTHER_PROGRAM, accounts.clone(), &instruction).expect("plans");
+        assert_eq!(
+            apply_to(&output, &opened_controlled()),
+            Err(EscrowError::NotDirect),
+            "{instruction:?}"
+        );
+        let output = plan_from(CONTROLLER, accounts, &instruction).expect("plans");
+        assert_eq!(
+            apply_to(&output, &opened()),
+            Err(EscrowError::NotDirect),
+            "{instruction:?}"
+        );
+    }
+}
+
+/// The controlled job after the controller released all of it.
+fn released_controlled() -> ShardData {
+    let output =
+        plan_from(CONTROLLER, vec![other(BUYER), other(job())], &release()).expect("plans");
+    apply_to(&output, &opened_controlled()).expect("release applies")
+}
+
+#[test]
+fn the_controller_cannot_deliver_or_pull_payouts_for_the_parties() {
+    // A payout pulled in a public call to a private address would be lost, so only the side
+    // being paid pulls, even when the controller calls.
+    let calls = [
+        (
+            vec![other(PROVIDER), other(job())],
+            deliver(),
+            opened_controlled(),
+        ),
+        (
+            vec![other(PROVIDER), other(job()), other(PAY_TO)],
+            claim(),
+            released_controlled(),
+        ),
+    ];
+    for (accounts, instruction, record) in calls {
+        let output = plan_from(CONTROLLER, accounts, &instruction).expect("plans");
+        assert_eq!(
+            apply_to(&output, &record),
+            Err(EscrowError::Unauthorized),
+            "{instruction:?}"
+        );
+    }
+    let returned = apply_to(
+        &plan_from(
+            CONTROLLER,
+            vec![other(PROVIDER), other(job())],
+            &give_back(),
+        )
+        .expect("plans"),
+        &opened_controlled(),
+    )
+    .expect("return applies");
+    let at_once = Instruction::Refund {
+        job_ref: JOB_REF,
+        amount: AMOUNT,
+        deadline: 0,
+    };
+    let unsigned = plan_from(
+        CONTROLLER,
+        vec![other(BUYER), other(job()), other(REFUND_TO)],
+        &at_once,
+    )
+    .expect("plans");
+    assert_eq!(
+        apply_to(&unsigned, &returned),
+        Err(EscrowError::Unauthorized)
+    );
+
+    // A party the controller authorizes, such as its own PDA, still pulls through it.
+    let signed = plan_from(
+        CONTROLLER,
+        vec![signer(BUYER), other(job()), other(REFUND_TO)],
+        &at_once,
+    )
+    .expect("plans");
+    assert_eq!(
+        decode(&apply_to(&signed, &returned).expect("applies")).state,
+        JobState::Refunded
+    );
+}
+
+#[test]
+fn the_parties_still_act_directly_on_a_controlled_job() {
+    let release = plan_with(release_accounts(), &release_of(200)).expect("plans");
+    let after_release = apply_to(&release, &opened_controlled()).expect("release applies");
+    let give_back = plan_with(return_accounts(), &give_back()).expect("plans");
+    assert_eq!(
+        decode(&apply_to(&give_back, &after_release).expect("return applies")).state,
+        JobState::Returned
+    );
+}
+
+#[test]
+fn delivery_on_a_controlled_job_releases_nothing() {
+    let output =
+        plan_with(vec![signer(PROVIDER), other(job())], &deliver()).expect("deliver plans");
+    let after = apply_to(&output, &opened_controlled()).expect("deliver applies");
+    let record = decode(&after);
+    assert_eq!(
+        (record.state, record.released, record.result),
+        (JobState::Open, 0, Some(RESULT))
+    );
+    // Once only.
+    assert_eq!(apply_to(&output, &after), Err(EscrowError::WrongState));
+    // The deadline still lets the buyer take everything back.
+    let refund = plan_with(
+        vec![signer(BUYER), other(job()), other(REFUND_TO)],
+        &refund(),
+    )
+    .expect("plans");
+    assert_eq!(
+        decode(&apply_to(&refund, &after).expect("refund applies")).state,
+        JobState::Refunded
+    );
 }
 
 fn give_back() -> Instruction {
@@ -577,7 +909,10 @@ fn return_marks_an_open_job_refundable_without_moving_money() {
 #[test]
 fn only_the_named_provider_can_return_a_job() {
     assert_eq!(
-        plan_with(vec![other(PROVIDER), other(job())], &give_back()).map(|_| ()),
+        apply_to(
+            &plan_with(vec![other(PROVIDER), other(job())], &give_back()).expect("plans"),
+            &opened()
+        ),
         Err(EscrowError::Unauthorized)
     );
 
@@ -595,7 +930,7 @@ fn returned() -> ShardData {
 #[test]
 fn only_an_open_job_can_be_returned() {
     let output = plan_with(return_accounts(), &give_back()).expect("plans");
-    for record in [delivered(), released(), returned()] {
+    for record in [delivered(), returned()] {
         assert_eq!(apply_to(&output, &record), Err(EscrowError::WrongState));
     }
 }
@@ -627,19 +962,67 @@ fn the_buyer_refunds_a_returned_job_at_once_to_its_refund_to() {
 }
 
 #[test]
-fn claim_and_refund_refuse_the_other_sides_releases() {
+fn refund_returns_only_what_was_never_released() {
+    let release = plan_with(release_accounts(), &release_of(200)).expect("plans");
+    let after_release = apply_to(&release, &opened()).expect("release applies");
+    let refund_of = |amount: u128| {
+        plan_with(
+            vec![signer(BUYER), other(job()), other(REFUND_TO)],
+            &Instruction::Refund {
+                job_ref: JOB_REF,
+                amount,
+                deadline: DEADLINE,
+            },
+        )
+        .expect("refund plans")
+    };
+    for wrong in [0, 299, AMOUNT] {
+        assert_eq!(
+            apply_to(&refund_of(wrong), &after_release),
+            Err(EscrowError::WrongAmount),
+            "{wrong}"
+        );
+    }
+    let rest = refund_of(300);
+    assert_eq!(
+        rest.chained_calls,
+        vec![
+            native_transfer(job(), REFUND_TO, 300)
+                .with_pda_seeds(vec![logos_escrow_core::job_seed(&BUYER, &JOB_REF)])
+        ]
+    );
+    let after_refund = apply_to(&rest, &after_release).expect("the refund applies");
+    assert_eq!(decode(&after_refund).state, JobState::Refunded);
+
+    // What was released before the refund is still the provider's to claim.
+    let claim = plan_with(
+        vec![signer(PROVIDER), other(job()), other(PAY_TO)],
+        &claim_of(200),
+    )
+    .expect("plans");
+    assert_eq!(
+        decode(&apply_to(&claim, &after_refund).expect("claim applies")).claimed,
+        200
+    );
+}
+
+#[test]
+fn nothing_released_cannot_be_claimed_and_nothing_left_cannot_be_refunded() {
     let claim = plan_with(
         vec![signer(PROVIDER), other(job()), other(PAY_TO)],
         &claim(),
     )
     .expect("plans");
-    assert_eq!(apply_to(&claim, &returned()), Err(EscrowError::WrongState));
+    assert_eq!(apply_to(&claim, &returned()), Err(EscrowError::WrongAmount));
     let refund = plan_with(
         vec![signer(BUYER), other(job()), other(REFUND_TO)],
         &refund(),
     )
     .expect("plans");
-    assert_eq!(apply_to(&refund, &released()), Err(EscrowError::WrongState));
+    assert_eq!(
+        apply_to(&refund, &released()),
+        Err(EscrowError::WrongAmount)
+    );
 }
 
 #[test]
@@ -668,6 +1051,7 @@ fn opened_paying_the_parties() -> ShardData {
         refund_to: BUYER,
         amount: AMOUNT,
         deadline: DEADLINE,
+        controller: None,
     };
     let output = plan_with(vec![signer(BUYER), other(job())], &open).expect("open plans");
     apply_to(&output, &[]).expect("open applies")
@@ -696,6 +1080,7 @@ fn open_refuses_the_job_account_as_a_payout_address() {
         refund_to: REFUND_TO,
         amount: AMOUNT,
         deadline: DEADLINE,
+        controller: None,
     };
     let refunds_itself = Instruction::Open {
         job_ref: JOB_REF,
@@ -704,6 +1089,7 @@ fn open_refuses_the_job_account_as_a_payout_address() {
         refund_to: job(),
         amount: AMOUNT,
         deadline: DEADLINE,
+        controller: None,
     };
     for instruction in [pays_itself, refunds_itself] {
         assert_eq!(
