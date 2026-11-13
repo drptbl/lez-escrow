@@ -9,11 +9,11 @@ Built for agent services in [logos-mcp](https://github.com/drptbl/logos-mcp), bu
 | Network | Value |
 | --- | --- |
 | Sequencer | `https://testnet.lez.logos.co/` (LEZ `v0.3.1`) |
-| Program id (header account) | `HpavNGFYxjyhLsy171aXsvv146yUeXmRWiho22uvT43d` |
-| Program id, hex | `f9eba477278c918fadafbcb4a6463e947d0fd8de344b5431ee0aa3cd41d7e3a4` |
-| Image id | `1d6461792a0ca794bb2e6d76460237acef8559e24d9e3d44570662362801a789` |
+| Program id (header account) | `H1VFAwgBoB8ECWQntzNVE7NpyFneVmtGFmZhJGwcT3sF` |
+| Program id, hex | `eddaed424d813f077c4c75da691a4e971ee52231e71b336ce20b9808a467aeea` |
+| Image id | `2430c22ae5ae5c3f84439a0461151ea0c05fbf01423bc4b840cab545de0b40e4` |
 | Immutable | yes, checked on chain |
-| Deployed | 2026-11-09, blocks 79270 to 79276, header tx `b538ab5e3a3da9f5d0685145af496b69b921dea30165c9e2c3e317bd74b1fcb7` |
+| Deployed | 2026-11-13, blocks 82105 to 82108, header tx `9de993ef063d36b973eac4995d30cf7f98c57f75b757ffaa1160097ceb06095f` |
 
 The program id is the account the program was deployed at, not the image id. Pass it as `program_id_hex` to `lez_core`.
 
@@ -21,8 +21,9 @@ The deployed binary is immutable. A fix means a new deploy at a new program id, 
 
 Each release on GitHub carries this binary, `logos_escrow.bin`, and its sha256, built from the release tag in CI. A release only publishes when the build's image id is the one above, so you can deploy the same program to a local chain.
 
-It replaces three earlier deploys, which still run, so jobs already open there finish there. Don't open new jobs on them:
+It replaces four earlier deploys, which still run, so jobs already open there finish there. Don't open new jobs on them:
 
+- `HpavNGFYxjyhLsy171aXsvv146yUeXmRWiho22uvT43d` has no controllers, and pays a job out in one piece.
 - `9jbUSu3t3rdZbmekKJ73DCwaFULWUWhPVVUbbgzdUgNL` has no payout addresses and pays by push, so it can't serve private parties safely.
 - `CAZ8AvrdAeZ4rQjHqhAucqSLqrMK8TFQ7Z8b2jg5Sb4G` has no `Return`.
 - `4gCJP2bc5YBCh3saEzudfTmNYZ4uZNDj8fUea4wsHrEM` also takes calls from other programs. LEZ `v0.3.1` carries a signer's authorization into chained calls, so any program a buyer or provider signs for could drive it.
