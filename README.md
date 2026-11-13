@@ -217,6 +217,17 @@ LEZ itself refuses the rest. In a public call those cost more: the transaction i
 
 Check the deadline and the buyer's balance before you send.
 
+## On your own devnet
+
+To test your project against the escrow, deploy the released binary on a local [logos-devnet](https://github.com/drptbl/logos-devnet) chain. In your `logos-devnet.toml`:
+
+```toml
+[programs]
+escrow = { url = "https://github.com/drptbl/logos-escrow/releases/download/v0.2.0/logos_escrow.bin", sha256 = "53e5fd1ae615fa2e7f29f400ffa75923d9026985ebf11cc5bd958ec777d042c9" }
+```
+
+`logos-devnet up` deploys it and exports its program id as `LOGOS_PROGRAM_ESCROW`. Read that, and fall back to the testnet id above when it isn't set. It's the same image as on testnet, so instructions, records and errors behave the same, but the program id differs, and so does every job account derived from it.
+
 ## Build and test
 
 You need Rust, Docker and the RISC Zero toolchain (`rzup install cargo-risczero 3.0.5`, `rzup install r0vm 3.0.5`, `rzup install rust`).
