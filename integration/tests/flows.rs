@@ -652,7 +652,6 @@ fn open_with_judge(chain: &mut Chain) {
 fn decide(decision: Decision) -> ArbiterInstruction {
     ArbiterInstruction::Decide {
         escrow: PROGRAM,
-        job_ref: JOB_REF,
         decision,
     }
 }
@@ -669,7 +668,10 @@ fn the_arbiters_judge_pays_part_and_returns_the_rest() {
         .arbiter(
             &operator(),
             &[operator().id, case, buyer().id, job()],
-            &decide(Decision::Release(200)),
+            &decide(Decision::Release {
+                job_ref: JOB_REF,
+                amount: 200,
+            }),
             BEFORE,
         )
         .expect("the judge releases part");
@@ -706,7 +708,10 @@ fn only_the_cases_judge_decides() {
     let result = chain.arbiter(
         &provider(),
         &[provider().id, case, buyer().id, job()],
-        &decide(Decision::Release(AMOUNT)),
+        &decide(Decision::Release {
+            job_ref: JOB_REF,
+            amount: AMOUNT,
+        }),
         BEFORE,
     );
     assert!(
