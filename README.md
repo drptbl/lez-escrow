@@ -62,6 +62,7 @@ A job can name a controller at `Open`, a program that acts on it besides the buy
 - On a controlled job, delivering only records the result. The provider gets paid when the buyer or the controller releases.
 - The parties keep their direct calls. The deadline still lets the buyer refund what was never released, so a stuck controller can't lock the money.
 - A program can only act on jobs that name it. A program that opens a job has to name itself, and a call from any other program is refused with `NotDirect`.
+- A party that is a program's PDA can only act through that program, so that program has to be the job's controller. Make a PDA provider for a job controlled by another program, or by none, and it can never deliver or claim: whatever was released to it stays in the job account.
 
 The controller decides who gets the money, never where it goes: payouts only reach `pay_to` and `refund_to`. Read what the controller does, and whether it can be updated, before you open or take a controlled job.
 
