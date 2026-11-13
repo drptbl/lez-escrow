@@ -69,6 +69,8 @@ The controller decides who gets the money, never where it goes: payouts only rea
 
 LEZ `v0.3.1` carries a signer's authorization into every chained call, so a program you sign a transaction for can open a job with your lepta, just as it could transfer them. The controller rule protects your existing jobs, not a signature you give a hostile program.
 
+[`examples/arbiter`](examples/arbiter/src/lib.rs) is a controller to start from. The buyer opens a job through it and names a judge, and only that judge can make it release or return. The judge is kept in the arbiter's own case account, derived from the job account, and checked in `apply`, so a call from anyone else fails whole, escrow call included. `integration/tests/flows.rs` runs it on LEZ's state machine. It's an example and isn't deployed anywhere.
+
 ## Job account
 
 The job account is a public PDA of the escrow program:
@@ -228,7 +230,7 @@ make test
 
 `make build` builds the guest in RISC Zero's Docker image `r0.1.91.1`, the one LEZ `v0.3.1` builds its own programs with, so the image id is reproducible. `methods/guest/Cargo.lock` is part of that identity too: change it and the image id changes. `make test` runs the program's rules as plain Rust, then the built binary through LEZ `v0.3.1`'s state machine with real signatures, transfers and deadlines. CI runs both, and fails when the build's image id isn't the deployed one above.
 
-`make build` also builds `test_controller.bin`, a test-only program that relays whatever escrow call it gets, so the tests can call the escrow from another program. It checks nothing, so never deploy it anywhere that matters.
+`make build` also builds the example arbiter, from its own guest crate so the escrow's image id never depends on it. Next to the escrow it builds `test_controller.bin`, a test-only program that relays whatever escrow call it gets, so the tests can call the escrow from another program. It checks nothing, so never deploy it anywhere that matters.
 
 `cli/tests/devnet.rs` runs every flow on a local chain from [logos-devnet](https://github.com/drptbl/logos-devnet), through the CLI and the same LEZ wallet `lez_core` wraps, with public and private parties. CI runs it too:
 
