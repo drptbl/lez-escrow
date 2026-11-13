@@ -510,6 +510,46 @@ fn a_program_cannot_act_on_a_job_it_does_not_control_even_when_the_buyer_signs()
 }
 
 #[test]
+fn a_program_opens_a_job_only_for_itself_and_cannot_claim_for_the_provider() {
+    let mut chain = Chain::new();
+    // The buyer signs, but the controller names no controller, or another program.
+    for named in [None, Some(PROGRAM)] {
+        let result = chain.relay_signed_by(
+            &buyer(),
+            &[buyer().id, job()],
+            vec![],
+            &open_instruction(named),
+            BEFORE,
+        );
+        assert!(
+            refused_with(logos_escrow_core::EscrowError::NotDirect.code())(&result),
+            "{named:?}: {result:?}"
+        );
+    }
+    assert_eq!(chain.balance(buyer().id), START);
+
+    chain.open_controlled_by(Some(CONTROLLER)).expect("open");
+    chain
+        .relay(&[buyer().id, job()], vec![], &release_of(AMOUNT), BEFORE)
+        .expect("the controller releases everything");
+    let claim = Instruction::Claim {
+        buyer: buyer().id,
+        job_ref: JOB_REF,
+        amount: AMOUNT,
+    };
+    assert!(refused_with(
+        logos_escrow_core::EscrowError::Unauthorized.code()
+    )(&chain.relay(
+        &[provider().id, job(), PAY_TO],
+        vec![],
+        &claim,
+        BEFORE
+    )));
+    assert_eq!(chain.balance(PAY_TO), 0);
+    assert_eq!(chain.balance(job()), AMOUNT);
+}
+
+#[test]
 fn a_controllers_own_account_opens_and_refunds_a_job_through_it() {
     let mut chain = Chain::new();
     let seed = [0x5E; 32];

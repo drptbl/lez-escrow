@@ -850,6 +850,23 @@ fn the_controller_cannot_deliver_or_pull_payouts_for_the_parties() {
 }
 
 #[test]
+fn nobody_releases_a_returned_job() {
+    let give_back = plan_from(
+        CONTROLLER,
+        vec![other(PROVIDER), other(job())],
+        &give_back(),
+    )
+    .expect("plans");
+    let returned = apply_to(&give_back, &opened_controlled()).expect("return applies");
+    let by_buyer = plan_with(release_accounts(), &release_of(1)).expect("plans");
+    let by_controller =
+        plan_from(CONTROLLER, vec![other(BUYER), other(job())], &release_of(1)).expect("plans");
+    for output in [by_buyer, by_controller] {
+        assert_eq!(apply_to(&output, &returned), Err(EscrowError::WrongState));
+    }
+}
+
+#[test]
 fn the_parties_still_act_directly_on_a_controlled_job() {
     let release = plan_with(release_accounts(), &release_of(200)).expect("plans");
     let after_release = apply_to(&release, &opened_controlled()).expect("release applies");
