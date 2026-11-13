@@ -210,8 +210,8 @@ make test
 `cli/tests/devnet.rs` runs every flow on a local chain from [logos-devnet](https://github.com/drptbl/logos-devnet), through the CLI and the same LEZ wallet `lez_core` wraps, with public and private parties. CI runs it too:
 
 ```bash
-make build && logos-devnet up && source .logos-devnet/env
-cargo test -p logos_escrow_cli --test devnet -- --ignored
+make build && logos-devnet up
+logos-devnet exec -- cargo test -p logos_escrow_cli --test devnet -- --ignored
 ```
 
 `cli/` is a small client on the same wallet code `lez_core` uses. A call goes private when the signer is one of the wallet's private accounts or the payee is a private payout address:

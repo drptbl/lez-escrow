@@ -53,7 +53,7 @@ jobs:
       - run: cargo test -p logos_escrow_integration
       # Every flow on a local chain, through the CLI and the LEZ wallet `lez_core` wraps, with
       # public and private parties. Starts the devnet from logos-devnet.toml and exports its env.
-      - uses: drptbl/logos-devnet@93edaaf3dd615d13e68702092306d02bcf108865 # v0.4.5
+      - uses: drptbl/logos-devnet@1a4b4cd67c0d562447c698bd12bf0dc3294ac76d # v0.8.0
       - run: cargo test -p logos_escrow_cli --test devnet -- --ignored
       - name: The sequencer's log
         if: failure()
