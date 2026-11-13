@@ -30,6 +30,8 @@ Start from [examples/arbiter](../../examples/arbiter/src/lib.rs) and its tests a
 - Your program opens the job itself and names its own program id as `controller`. The escrow refuses a program that names anything else.
 - Your program alone may `Release` and `Return` without the parties. `Deliver`, `Claim` and `Refund` stay with the party they name, or with your program's PDA when you pass its `pda_seeds`.
 - Decide who may act in your program's `apply`, against state your program stored: `plan` sees no account data. A failed `apply` fails the whole transaction, escrow call included.
+- Take a decision only from a direct call (`caller_account_id` is `None`). LEZ carries a signature into every chained call, so otherwise any program your decider signs for could decide in their name.
+- Bind your own state to the escrow's job: check the job account against `job_account_id(escrow, buyer, job_ref)` before you record anything for it, so nobody records first for someone else's job through an escrow of their own.
 - A party that is a program's PDA acts only through that program, so that program must be the job's controller.
 - Build your guest in its own crate. A guest sharing the escrow's crate changes the escrow's image id, and the build no longer matches the deployed program.
 
