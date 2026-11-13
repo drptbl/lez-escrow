@@ -40,7 +40,7 @@ jobs:
         run: |
           cp methods/guest/target/riscv32im-risc0-zkvm-elf/docker/logos_escrow.bin .
           sha256sum logos_escrow.bin > logos_escrow.bin.sha256
-          image=$(grep -o 'ImageID: [0-9a-f]*' build.log | cut -d' ' -f2)
+          image=$(grep 'logos_escrow.bin' build.log | grep -o 'ImageID: [0-9a-f]*' | cut -d' ' -f2)
           program=$(grep -o '| Program id (header account) | `[A-Za-z0-9]*`' README.md | grep -o '`[A-Za-z0-9]*`' | tr -d '`')
           cat > notes.md <<NOTES
           The escrow program as deployed on the LEZ \`v0.3.1\` testnet.

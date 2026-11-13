@@ -3,7 +3,8 @@
 # A different one means the source no longer builds the program that is on chain.
 # Usage: scripts/check-image-id.sh <make build log>
 set -euo pipefail
-built=$(grep -o 'ImageID: [0-9a-f]*' "$1" | cut -d' ' -f2)
+# The build also makes the test-only controller, so take the escrow's line.
+built=$(grep 'logos_escrow.bin' "$1" | grep -o 'ImageID: [0-9a-f]*' | cut -d' ' -f2)
 deployed=$(grep -o '| Image id | `[0-9a-f]*`' README.md | grep -o '[0-9a-f]\{64\}')
 echo "built    $built"
 echo "deployed $deployed"
