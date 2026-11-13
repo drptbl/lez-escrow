@@ -2,8 +2,8 @@
 //! with public and private parties.
 //!
 //! ```bash
-//! make build && logos-devnet up && source .logos-devnet/env
-//! cargo test -p logos_escrow_cli --test devnet -- --ignored
+//! make build && logos-devnet up
+//! logos-devnet exec -- cargo test -p logos_escrow_cli --test devnet -- --ignored
 //! ```
 
 use std::{
