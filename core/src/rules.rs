@@ -45,6 +45,20 @@ pub struct Job {
     pub controller: Option<AccountId>,
 }
 
+impl Job {
+    /// What the provider may claim now.
+    #[must_use]
+    pub const fn claimable(&self) -> Balance {
+        self.released - self.claimed
+    }
+
+    /// What was never released: what `Release` may still release, and what `Refund` returns.
+    #[must_use]
+    pub const fn unreleased(&self) -> Balance {
+        self.amount - self.released
+    }
+}
+
 /// Who asked for an action.
 #[derive(Debug, Clone, Copy, BorshSerialize, BorshDeserialize)]
 pub struct Origin {
@@ -87,25 +101,28 @@ pub enum Action {
 /// A program may only act on a job it controls. The controller may `Release` and `Return` on its
 /// own; every other action needs the party it names, so only the side being paid pulls a payout.
 pub fn step(pre: Option<Job>, origin: Origin, action: Action) -> Result<Job, EscrowError> {
+    // The new job's controller for `Open`, so a program opens a job only for itself.
+    let controller = match (&action, &pre) {
+        (Action::Open(job), _) | (_, Some(job)) => job.controller,
+        (_, None) => return Err(EscrowError::NoJob),
+    };
+    if origin.caller.is_some() && origin.caller != controller {
+        return Err(EscrowError::NotDirect);
+    }
+    let controller_acts_alone =
+        origin.caller.is_some() && matches!(action, Action::Release { .. } | Action::Return { .. });
+    if !controller_acts_alone && !origin.party_authorized {
+        return Err(EscrowError::Unauthorized);
+    }
     if let Action::Open(job) = action {
-        // A program opens a job only for itself, and the buyer always pays.
-        if origin.caller.is_some() && origin.caller != job.controller {
-            return Err(EscrowError::NotDirect);
-        }
-        party(origin)?;
         return match pre {
             Some(_) => Err(EscrowError::JobExists),
             None => Ok(job),
         };
     }
-    let mut job = pre.ok_or(EscrowError::NoJob)?;
-    if origin.caller.is_some() && origin.caller != job.controller {
-        return Err(EscrowError::NotDirect);
-    }
-    let decision = matches!(action, Action::Release { .. } | Action::Return { .. });
-    if !(decision && origin.caller.is_some()) {
-        party(origin)?;
-    }
+    let Some(mut job) = pre else {
+        return Err(EscrowError::NoJob);
+    };
     match action {
         Action::Open(_) => unreachable!("handled above"),
         Action::Deliver {
@@ -140,7 +157,7 @@ pub fn step(pre: Option<Job>, origin: Origin, action: Action) -> Result<Job, Esc
             if job.provider != provider || job.pay_to != payee {
                 return Err(EscrowError::WrongParty);
             }
-            if amount == 0 || amount > job.released - job.claimed {
+            if amount == 0 || amount > job.claimable() {
                 return Err(EscrowError::WrongAmount);
             }
             job.claimed += amount;
@@ -150,7 +167,7 @@ pub fn step(pre: Option<Job>, origin: Origin, action: Action) -> Result<Job, Esc
                 return Err(EscrowError::WrongState);
             }
             // Bounded by what is left before adding, so it cannot overflow.
-            if amount == 0 || amount > job.amount - job.released {
+            if amount == 0 || amount > job.unreleased() {
                 return Err(EscrowError::WrongAmount);
             }
             job.released += amount;
@@ -171,7 +188,7 @@ pub fn step(pre: Option<Job>, origin: Origin, action: Action) -> Result<Job, Esc
                 JobState::Open | JobState::Returned => {}
                 _ => return Err(EscrowError::WrongState),
             }
-            if amount == 0 || amount != job.amount - job.released {
+            if amount == 0 || amount != job.unreleased() {
                 return Err(EscrowError::WrongAmount);
             }
             job.state = JobState::Refunded;
@@ -187,12 +204,4 @@ pub fn step(pre: Option<Job>, origin: Origin, action: Action) -> Result<Job, Esc
         }
     }
     Ok(job)
-}
-
-fn party(origin: Origin) -> Result<(), EscrowError> {
-    if origin.party_authorized {
-        Ok(())
-    } else {
-        Err(EscrowError::Unauthorized)
-    }
 }

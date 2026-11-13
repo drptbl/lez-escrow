@@ -280,7 +280,7 @@ async fn main() -> Result<()> {
             let instruction = Instruction::Claim {
                 buyer: payout.job.buyer,
                 job_ref: payout.job.job_ref,
-                amount: record.released - record.claimed,
+                amount: record.claimable(),
             };
             let accounts = escrow.payout_accounts(&payout, record.provider, record.pay_to)?;
             escrow.send(&payout.job, accounts, &instruction).await?;
@@ -290,7 +290,7 @@ async fn main() -> Result<()> {
                 Some(amount) => amount,
                 None => {
                     let record = escrow.record(&job).await?;
-                    record.amount - record.released
+                    record.unreleased()
                 }
             };
             let instruction = Instruction::Release {
@@ -308,7 +308,7 @@ async fn main() -> Result<()> {
             let record = escrow.record(&payout.job).await?;
             let instruction = Instruction::Refund {
                 job_ref: payout.job.job_ref,
-                amount: record.amount - record.released,
+                amount: record.unreleased(),
                 // A returned job refunds at once, so its deadline no longer applies.
                 deadline: if record.state == JobState::Returned {
                     0
