@@ -10,4 +10,5 @@ publish = false
 lee = { workspace = true, features = ["test-utils"] }
 lee_core.workspace = true
 logos_escrow_core = { path = "../core" }
+logos_escrow_arbiter = { path = "../examples/arbiter" }
 borsh.workspace = true

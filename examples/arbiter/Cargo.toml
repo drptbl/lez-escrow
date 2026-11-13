@@ -1,0 +1,12 @@
+[package]
+name = "logos_escrow_arbiter"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+logos_escrow_core = { path = "../../core" }
+lee_core.workspace = true
+borsh.workspace = true
+risc0-zkvm.workspace = true
