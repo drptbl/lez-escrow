@@ -1,19 +1,19 @@
 # logos-escrow
 
-Job escrow for the Logos Execution Zone. A buyer locks a payment for one job, the provider gets it when it delivers, and the buyer gets it back when the provider doesn't deliver by the deadline.
+Job escrow for the Logos Execution Zone. A buyer locks a payment for one job and releases it to the provider in parts, or all at once when the provider delivers. The buyer gets back what was never released when the provider doesn't deliver by the deadline.
 
-Built for agent services in [logos-mcp](https://github.com/drptbl/logos-mcp), but any LEZ wallet can call it. Testnet only: LEZ is not meant for real funds yet.
+Built for agent services in [logos-mcp](https://github.com/drptbl/logos-mcp), but any LEZ wallet can call it, and other programs can build on it: a job can name a controller program, such as a marketplace, a DAO or an arbiter, that decides what the provider gets. Testnet only: LEZ is not meant for real funds yet.
 
 ## Deployment
 
 | Network | Value |
 | --- | --- |
 | Sequencer | `https://testnet.lez.logos.co/` (LEZ `v0.3.1`) |
-| Program id (header account) | `HpavNGFYxjyhLsy171aXsvv146yUeXmRWiho22uvT43d` |
-| Program id, hex | `f9eba477278c918fadafbcb4a6463e947d0fd8de344b5431ee0aa3cd41d7e3a4` |
-| Image id | `1d6461792a0ca794bb2e6d76460237acef8559e24d9e3d44570662362801a789` |
+| Program id (header account) | `H1VFAwgBoB8ECWQntzNVE7NpyFneVmtGFmZhJGwcT3sF` |
+| Program id, hex | `eddaed424d813f077c4c75da691a4e971ee52231e71b336ce20b9808a467aeea` |
+| Image id | `2430c22ae5ae5c3f84439a0461151ea0c05fbf01423bc4b840cab545de0b40e4` |
 | Immutable | yes, checked on chain |
-| Deployed | 2026-11-09, blocks 79270 to 79276, header tx `b538ab5e3a3da9f5d0685145af496b69b921dea30165c9e2c3e317bd74b1fcb7` |
+| Deployed | 2026-11-13, blocks 82105 to 82108, header tx `9de993ef063d36b973eac4995d30cf7f98c57f75b757ffaa1160097ceb06095f` |
 
 The program id is the account the program was deployed at, not the image id. Pass it as `program_id_hex` to `lez_core`.
 
@@ -21,8 +21,9 @@ The deployed binary is immutable. A fix means a new deploy at a new program id, 
 
 Each release on GitHub carries this binary, `logos_escrow.bin`, and its sha256, built from the release tag in CI. A release only publishes when the build's image id is the one above, so you can deploy the same program to a local chain.
 
-It replaces three earlier deploys, which still run, so jobs already open there finish there. Don't open new jobs on them:
+It replaces four earlier deploys, which still run, so jobs already open there finish there. Don't open new jobs on them:
 
+- `HpavNGFYxjyhLsy171aXsvv146yUeXmRWiho22uvT43d` has no controllers, and pays a job out in one piece.
 - `9jbUSu3t3rdZbmekKJ73DCwaFULWUWhPVVUbbgzdUgNL` has no payout addresses and pays by push, so it can't serve private parties safely.
 - `CAZ8AvrdAeZ4rQjHqhAucqSLqrMK8TFQ7Z8b2jg5Sb4G` has no `Return`.
 - `4gCJP2bc5YBCh3saEzudfTmNYZ4uZNDj8fUea4wsHrEM` also takes calls from other programs. LEZ `v0.3.1` carries a signer's authorization into chained calls, so any program a buyer or provider signs for could drive it.
@@ -35,23 +36,38 @@ The buyer names two payout addresses at `Open`: `pay_to`, where the provider is 
 
 | State | Reached by | Next |
 | --- | --- | --- |
-| `Open` | `Open` | `Delivered`, `Released`, `Returned`, `Refunded` |
-| `Delivered` | `Deliver` | `Claimed`, `Released` |
-| `Released` | `Release` | `Claimed` |
+| `Open` | `Open` | `Delivered`, `Returned`, `Refunded` |
+| `Delivered` | `Deliver`, on a job without a controller | final |
 | `Returned` | `Return` | `Refunded` |
-| `Claimed` | `Claim` | final |
 | `Refunded` | `Refund` | final |
 
+The record also counts lepta: `released` is how much of `amount` the provider may take, and `claimed` how much it took. `Claim` works in any state, so whatever was released stays the provider's after a `Return` or a `Refund`.
+
 - The provider delivers by recording a 32-byte result hash before the deadline, for example the SHA-256 of the result it sent. The chain can't check the result itself.
-- There are no disputes. Once delivered, the provider can claim at any time and the buyer can no longer refund.
-- A provider that can't do an open job can `Return` it, and the buyer can then refund at once instead of waiting for the deadline.
-- The buyer can `Release` an open or delivered job, and the provider can then claim it without delivering.
-- The buyer picks both payout addresses, so a provider should read the record and check `pay_to`, `amount` and `deadline` before it works on a job.
+- On a job without a controller there are no disputes. Delivering releases everything left, and the buyer can no longer refund. On a controlled job, delivering releases nothing, see [Controllers](#controllers).
+- The buyer can `Release` any part of what's left of an open job, as many times as it likes, and the provider can claim it without delivering.
+- A provider that can't do an open job can `Return` it, and the buyer can then refund what was never released at once instead of waiting for the deadline.
+- The buyer picks both payout addresses, so a provider should read the record and check `pay_to`, `amount`, `deadline` and `controller` before it works on a job.
 - Deadlines are milliseconds since the Unix epoch, checked against the block's timestamp.
 - The record stays after the job ends, so a job reference can't be used twice.
 - There is no escrow fee. Whoever pays for a transaction must hold LEZ's whole fee reserve up front, about 16M lepta at the wallet's default gas limit, and gets back what it didn't use. A buyer paying for its own `Open` needs `amount` plus that reserve. On a local LEZ `v0.3.1` sequencer at base fee `8`, `Open`, `Deliver` and `Claim` each charged 210,000 to 250,000 lepta, about 30,000 gas. A gas limit of 200,000 is plenty and cuts the reserve to about 1.6M.
 - The job itself is public: anyone can read its record, amount and deadline. Buyer and provider can still act from private accounts.
-- Payouts move exactly `amount`. Lepta that someone sends to a job account on top of it stay there for good.
+- Payouts never move more than `amount` in total. Lepta that someone sends to a job account on top of it stay there for good.
+
+## Controllers
+
+A job can name a controller at `Open`, a program that acts on it besides the buyer and provider. It calls the escrow in a chained call with the same accounts and instruction data a party would send, with the party's account unsigned.
+
+- The controller can `Release` any part of what's left and `Return` the job without the parties. Those are an arbiter's two decisions: pay the provider, or give the rest back.
+- `Deliver`, `Claim` and `Refund` still need the party they name, even from the controller. So only the side being paid pulls a payout, and a controller can't pull one publicly to a private payout address, where it would be lost. A party that is the controller's own PDA signs through it, with `pda_seeds` in the chained call.
+- On a controlled job, delivering only records the result. The provider gets paid when the buyer or the controller releases.
+- The parties keep their direct calls. The deadline still lets the buyer refund what was never released, so a stuck controller can't lock the money.
+- A program can only act on jobs that name it. A program that opens a job has to name itself, and a call from any other program is refused with `NotDirect`.
+- A party that is a program's PDA can only act through that program, so that program has to be the job's controller. Make a PDA provider for a job controlled by another program, or by none, and it can never deliver or claim: whatever was released to it stays in the job account.
+
+The controller decides who gets the money, never where it goes: payouts only reach `pay_to` and `refund_to`. Read what the controller does, and whether it can be updated, before you open or take a controlled job.
+
+LEZ `v0.3.1` carries a signer's authorization into every chained call, so a program you sign a transaction for can open a job with your lepta, just as it could transfer them. The controller rule protects your existing jobs, not a signature you give a hostile program.
 
 ## Job account
 
@@ -82,26 +98,26 @@ send_generic_public_transaction(account_ids, signing_requirements, instruction, 
 | Instruction | `account_ids` | Signs | Allowed when | Moves |
 | --- | --- | --- | --- | --- |
 | `Open` | `[buyer, job]` | buyer | before `deadline`, job account empty | `amount` from buyer to job |
-| `Deliver` | `[provider, job]` | provider | before `deadline`, `Open` | nothing |
-| `Claim` | `[provider, job, pay_to]` | provider | `Delivered` or `Released` | `amount` from job to `pay_to` |
-| `Release` | `[buyer, job]` | buyer | `Open` or `Delivered` | nothing |
-| `Refund` | `[buyer, job, refund_to]` | buyer | `Open` from `deadline` on, or `Returned` | `amount` from job to `refund_to` |
-| `Return` | `[provider, job]` | provider | `Open` | nothing |
+| `Deliver` | `[provider, job]` | provider | before `deadline`, `Open`, once | nothing |
+| `Claim` | `[provider, job, pay_to]` | provider | any state, `amount` up to `released - claimed` | `amount` from job to `pay_to` |
+| `Release` | `[buyer, job]` | buyer, or the controller | `Open`, `amount` up to `amount - released` | nothing |
+| `Refund` | `[buyer, job, refund_to]` | buyer | `Open` from `deadline` on, or `Returned` | `amount - released` from job to `refund_to` |
+| `Return` | `[provider, job]` | provider, or the controller | `Open` | nothing |
 
 When the payout address is the signer itself, leave it out: `Claim` takes `[provider, job]` and `Refund` takes `[buyer, job]`. LEZ refuses a call that names the same account twice. A `Refund` after a `Return` passes `deadline` 0, because the deadline no longer applies.
 
-The program can't read the job record while it plans a call. So every instruction carries the values the record must match, and the call fails when they don't. Read the record first and copy `amount` and `deadline` from it.
+The program can't read the job record while it plans a call. So every instruction carries the values the record must match, and the call fails when they don't. Read the record first: `Deliver` quotes its `deadline`, a `Claim` takes at most `released - claimed`, and a `Refund` exactly `amount - released`.
 
 ### Instruction data
 
-Borsh: one variant byte, then the fields in order. Integers are little-endian, and an account id or hash is 32 raw bytes.
+Borsh: one variant byte, then the fields in order. Integers are little-endian, an account id or hash is 32 raw bytes, and an `Option` is `0`, or `1` and the value.
 
 | Byte 0 | Instruction | Fields | Length |
 | --- | --- | --- | --- |
-| `0` | `Open` | `job_ref: [u8; 32]`, `provider: [u8; 32]`, `pay_to: [u8; 32]`, `refund_to: [u8; 32]`, `amount: u128`, `deadline: u64` | 153 |
+| `0` | `Open` | `job_ref: [u8; 32]`, `provider: [u8; 32]`, `pay_to: [u8; 32]`, `refund_to: [u8; 32]`, `amount: u128`, `deadline: u64`, `controller: Option<[u8; 32]>` | 154, or 186 with a controller |
 | `1` | `Deliver` | `result: [u8; 32]`, `deadline: u64` | 41 |
 | `2` | `Claim` | `buyer: [u8; 32]`, `job_ref: [u8; 32]`, `amount: u128` | 81 |
-| `3` | `Release` | `job_ref: [u8; 32]` | 33 |
+| `3` | `Release` | `job_ref: [u8; 32]`, `amount: u128` | 49 |
 | `4` | `Refund` | `job_ref: [u8; 32]`, `amount: u128`, `deadline: u64` | 57 |
 | `5` | `Return` | none | 1 |
 
@@ -131,9 +147,14 @@ The record is Borsh:
 | `pay_to` | `[u8; 32]` |
 | `refund_to` | `[u8; 32]` |
 | `amount` | `u128` |
+| `released` | `u128` |
+| `claimed` | `u128` |
 | `deadline` | `u64`, milliseconds |
-| `result` | `Option<[u8; 32]>`: `0`, or `1` and the hash |
-| `state` | `u8`: `0` Open, `1` Delivered, `2` Claimed, `3` Released, `4` Refunded, `5` Returned |
+| `state` | `u8`: `0` Open, `1` Delivered, `2` Returned, `3` Refunded |
+| `result` | `Option<[u8; 32]>` |
+| `controller` | `Option<[u8; 32]>` |
+
+`core/tests/escrow.rs` (`the_job_record_and_controlled_open_layout_are_stable`) pins a whole record against a literal.
 
 ## Private accounts
 
@@ -178,7 +199,7 @@ The program refuses a call by exiting with one of these codes. LEZ then charges 
 | Code | Error | Means |
 | --- | --- | --- |
 | 1 | `InvalidInstruction` | instruction data or account list doesn't decode |
-| 2 | `Unauthorized` | the account that must sign didn't |
+| 2 | `Unauthorized` | the party the instruction names didn't authorize it |
 | 3 | `WrongJobAccount` | job account isn't the one derived from buyer and `job_ref`. `Deliver` and `Return` only check that the account selects the escrow shard, so there any other wrong account shows up as `WrongParty`, `WrongDeadline` or `NoJob` |
 | 4 | `JobExists` | `Open` on a job account that already has a record |
 | 5 | `InvalidTerms` | `Open` with a zero amount, the buyer as provider, or the job account as a payout address |
@@ -186,8 +207,8 @@ The program refuses a call by exiting with one of these codes. LEZ then charges 
 | 7 | `WrongDeadline` | `deadline` isn't the job's |
 | 8 | `NoJob` | no record in the job account |
 | 9 | `WrongState` | the job isn't in a state this instruction takes |
-| 10 | `WrongAmount` | `amount` isn't the job's |
-| 11 | `NotDirect` | another program called the escrow. Only direct calls are taken |
+| 10 | `WrongAmount` | `amount` is zero, more than a `Release` or `Claim` may move, or not what a `Refund` returns |
+| 11 | `NotDirect` | a program other than the job's controller called the escrow, or a program opened a job without naming itself |
 
 LEZ itself refuses the rest. In a public call those cost more: the transaction is still included, changes nothing and pays its whole gas limit. In a private call they are dropped like any other refusal.
 
@@ -207,6 +228,8 @@ make test
 
 `make build` builds the guest in RISC Zero's Docker image `r0.1.91.1`, the one LEZ `v0.3.1` builds its own programs with, so the image id is reproducible. `methods/guest/Cargo.lock` is part of that identity too: change it and the image id changes. `make test` runs the program's rules as plain Rust, then the built binary through LEZ `v0.3.1`'s state machine with real signatures, transfers and deadlines. CI runs both, and fails when the build's image id isn't the deployed one above.
 
+`make build` also builds `test_controller.bin`, a test-only program that relays whatever escrow call it gets, so the tests can call the escrow from another program. It checks nothing, so never deploy it anywhere that matters.
+
 `cli/tests/devnet.rs` runs every flow on a local chain from [logos-devnet](https://github.com/drptbl/logos-devnet), through the CLI and the same LEZ wallet `lez_core` wraps, with public and private parties. CI runs it too:
 
 ```bash
@@ -220,10 +243,13 @@ logos-devnet exec -- cargo test -p logos_escrow_cli --test devnet -- --ignored
 export LEE_WALLET_HOME_DIR=~/.lez-escrow/wallet LOGOS_ESCROW_PROGRAM=<program id>
 cargo run -p logos_escrow_cli -- payout-address --owner <private account id> --out provider.addr
 cargo run -p logos_escrow_cli -- open --buyer <id> --job-ref <hex> --provider <id> --pay-to <id> --refund-to <id> --amount 1000000 --in-secs 3600
+cargo run -p logos_escrow_cli -- release --buyer <id> --job-ref <hex> --amount 250000
 cargo run -p logos_escrow_cli -- deliver --buyer <id> --job-ref <hex> --result <hex>
 cargo run -p logos_escrow_cli -- claim --buyer <id> --job-ref <hex> --payee-address provider.addr
 cargo run -p logos_escrow_cli -- show --buyer <id> --job-ref <hex>
 ```
+
+`open --controller <program id>` names a controller. `release` without `--amount` releases everything left, `claim` takes everything released and not yet claimed, and `refund` everything never released.
 
 `payout-address` makes a fresh private address under one of your private accounts' keys, prints its id for `open`, and writes the file you pass as `--payee-address` when you claim or refund to it. Keep that file: its identifier is the only way to reach a fresh address, so the command never overwrites one. Once your wallet holds the address, the CLI uses it directly. For someone else's public account, pass `--public-payee`. Otherwise the CLI refuses a payout it can't place.
 

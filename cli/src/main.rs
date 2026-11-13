@@ -104,6 +104,10 @@ enum Command {
         deadline_ms: Option<u64>,
         #[arg(long)]
         in_secs: Option<u64>,
+        /// A program that may release and return the job besides the parties. On a controlled
+        /// job, delivering releases nothing; the controller decides.
+        #[arg(long)]
+        controller: Option<AccountId>,
     },
     /// Provider: record the result hash before the deadline.
     Deliver {
@@ -112,14 +116,19 @@ enum Command {
         #[arg(long, value_parser = parse_hash)]
         result: Hash32,
     },
-    /// Provider: collect a delivered or released job to its `pay_to`.
+    /// Provider: collect everything released and not yet claimed to the job's `pay_to`.
     Claim(PayoutArgs),
-    /// Buyer: let the provider claim now.
-    Release(JobArgs),
-    /// Buyer: take an undelivered job back to its `refund_to`, after its deadline or once the
-    /// provider returned it.
+    /// Buyer: let the provider claim `amount` more, by default all that is left.
+    Release {
+        #[command(flatten)]
+        job: JobArgs,
+        #[arg(long)]
+        amount: Option<Balance>,
+    },
+    /// Buyer: take back what was never released to the job's `refund_to`, after its deadline or
+    /// once the provider returned it.
     Refund(PayoutArgs),
-    /// Provider: give an open job up, so the buyer can refund it at once.
+    /// Provider: give an open job up, so the buyer can refund what was never released at once.
     Return(JobArgs),
 }
 
@@ -227,6 +236,7 @@ async fn main() -> Result<()> {
             amount,
             deadline_ms,
             in_secs,
+            controller,
         } => {
             let deadline = match (deadline_ms, in_secs) {
                 (Some(deadline), _) => deadline,
@@ -243,6 +253,7 @@ async fn main() -> Result<()> {
                 refund_to,
                 amount,
                 deadline,
+                controller,
             };
             let accounts = vec![
                 escrow.signs(job.buyer),
@@ -269,14 +280,22 @@ async fn main() -> Result<()> {
             let instruction = Instruction::Claim {
                 buyer: payout.job.buyer,
                 job_ref: payout.job.job_ref,
-                amount: record.amount,
+                amount: record.claimable(),
             };
             let accounts = escrow.payout_accounts(&payout, record.provider, record.pay_to)?;
             escrow.send(&payout.job, accounts, &instruction).await?;
         }
-        Command::Release(job) => {
+        Command::Release { job, amount } => {
+            let amount = match amount {
+                Some(amount) => amount,
+                None => {
+                    let record = escrow.record(&job).await?;
+                    record.unreleased()
+                }
+            };
             let instruction = Instruction::Release {
                 job_ref: job.job_ref,
+                amount,
             };
             let accounts = vec![
                 escrow.signs(job.buyer),
@@ -289,7 +308,7 @@ async fn main() -> Result<()> {
             let record = escrow.record(&payout.job).await?;
             let instruction = Instruction::Refund {
                 job_ref: payout.job.job_ref,
-                amount: record.amount,
+                amount: record.unreleased(),
                 // A returned job refunds at once, so its deadline no longer applies.
                 deadline: if record.state == JobState::Returned {
                     0

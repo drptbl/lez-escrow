@@ -16,6 +16,11 @@ strip = "symbols"
 name = "logos_escrow"
 path = "src/bin/logos_escrow.rs"
 
+# Test-only: relays escrow calls so tests can call the escrow from another program. Never deploy.
+[[bin]]
+name = "test_controller"
+path = "src/bin/test_controller.rs"
+
 [dependencies]
 logos_escrow_core = { path = "../../core" }
 lee_core = { git = "https://github.com/logos-blockchain/logos-execution-zone.git", tag = "v0.3.1" }
