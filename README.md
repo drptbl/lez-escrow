@@ -4,6 +4,14 @@ Job escrow for the Logos Execution Zone. A buyer locks a payment for one job and
 
 Built for agent services in [logos-mcp](https://github.com/drptbl/logos-mcp), but any LEZ wallet can call it, and other programs can build on it: a job can name a controller program, such as a marketplace, a DAO or an arbiter, that decides what the provider gets. Testnet only: LEZ is not meant for real funds yet.
 
+## For agents
+
+The repo is also a Claude Code plugin with a `logos-escrow` skill, for agents that integrate the escrow: the order of calls, the rules integrations get wrong, writing a controller, and testing on a devnet. Install it with:
+
+```text
+/plugin install logos-escrow --marketplace drptbl/logos-escrow
+```
+
 ## Deployment
 
 | Network | Value |

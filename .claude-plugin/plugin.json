@@ -1,0 +1,8 @@
+{
+  "name": "logos-escrow",
+  "version": "0.2.0",
+  "description": "Integrate the logos-escrow job escrow on the Logos Execution Zone: client calls, controller programs and devnet testing.",
+  "author": {
+    "name": "drptbl"
+  }
+}
