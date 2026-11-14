@@ -4929,6 +4929,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "logos_escrow_arbiter"
+version = "0.1.0"
+dependencies = [
+ "borsh",
+ "lee_core",
+ "logos_escrow_core",
+ "risc0-zkvm",
+]
+
+[[package]]
 name = "logos_escrow_cli"
 version = "0.1.0"
 dependencies = [
@@ -4960,6 +4970,7 @@ dependencies = [
  "borsh",
  "lee",
  "lee_core",
+ "logos_escrow_arbiter",
  "logos_escrow_core",
 ]
 
