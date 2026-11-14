@@ -4,14 +4,6 @@ Job escrow for the Logos Execution Zone. A buyer locks a payment for one job and
 
 Built for agent services in [logos-mcp](https://github.com/drptbl/logos-mcp), but any LEZ wallet can call it, and other programs can build on it: a job can name a controller program, such as a marketplace, a DAO or an arbiter, that decides what the provider gets. Testnet only: LEZ is not meant for real funds yet.
 
-## For agents
-
-The repo is also a Claude Code plugin with a `logos-escrow` skill, for agents that integrate the escrow: the order of calls, the rules integrations get wrong, writing a controller, and testing on a devnet. Install it with:
-
-```text
-/plugin install logos-escrow --marketplace drptbl/logos-escrow
-```
-
 ## Deployment
 
 | Network | Value |
@@ -28,13 +20,6 @@ The program id is the account the program was deployed at, not the image id. Pas
 The deployed binary is immutable. A fix means a new deploy at a new program id, and jobs already open finish on the old one.
 
 Each release on GitHub carries this binary, `logos_escrow.bin`, and its sha256, built from the release tag in CI. A release only publishes when the build's image id is the one above, so you can deploy the same program to a local chain.
-
-It replaces four earlier deploys, which still run, so jobs already open there finish there. Don't open new jobs on them:
-
-- `HpavNGFYxjyhLsy171aXsvv146yUeXmRWiho22uvT43d` has no controllers, and pays a job out in one piece.
-- `9jbUSu3t3rdZbmekKJ73DCwaFULWUWhPVVUbbgzdUgNL` has no payout addresses and pays by push, so it can't serve private parties safely.
-- `CAZ8AvrdAeZ4rQjHqhAucqSLqrMK8TFQ7Z8b2jg5Sb4G` has no `Return`.
-- `4gCJP2bc5YBCh3saEzudfTmNYZ4uZNDj8fUea4wsHrEM` also takes calls from other programs. LEZ `v0.3.1` carries a signer's authorization into chained calls, so any program a buyer or provider signs for could drive it.
 
 ## How it works
 
@@ -77,7 +62,7 @@ The controller decides who gets the money, never where it goes: payouts only rea
 
 LEZ `v0.3.1` carries a signer's authorization into every chained call, so a program you sign a transaction for can open a job with your lepta, just as it could transfer them. The controller rule protects your existing jobs, not a signature you give a hostile program.
 
-[`examples/arbiter`](examples/arbiter/src/lib.rs) is a controller to start from. The buyer opens a job through it and names a judge, and only that judge can make it release or return. The judge is kept in the arbiter's own case account, derived from the job account, and checked in `apply`, so a call from anyone else fails whole, escrow call included. `integration/tests/flows.rs` runs it on LEZ's state machine. It's an example and isn't deployed anywhere.
+[`examples/arbiter`](examples/arbiter) is a controller to start from, where a named judge decides each job, with a walkthrough you can run on a local devnet.
 
 ## Job account
 
@@ -238,6 +223,32 @@ escrow = { url = "https://github.com/drptbl/logos-escrow/releases/download/v0.2.
 
 `logos-devnet up` deploys it and exports its program id as `LOGOS_PROGRAM_ESCROW`. Read that, and fall back to the testnet id above when it isn't set. It's the same image as on testnet, so instructions, records and errors behave the same, but the program id differs, and so does every job account derived from it.
 
+## CLI
+
+`cli/` is a small client on the same wallet code `lez_core` uses, with the wallet at `LEE_WALLET_HOME_DIR`. A call goes private when the signer is one of the wallet's private accounts or the payee is a private payout address:
+
+```bash
+export LEE_WALLET_HOME_DIR=~/my-wallet LOGOS_ESCROW_PROGRAM=<program id>
+cargo run -p logos_escrow_cli -- open --buyer <id> --job-ref <hex> --provider <id> --pay-to <id> --refund-to <id> --amount 1000000 --in-secs 3600
+cargo run -p logos_escrow_cli -- show --buyer <id> --job-ref <hex>
+```
+
+| Command | What it does |
+| --- | --- |
+| `open` | Buyer: locks `--amount` for `--provider` until `--deadline-ms`, or `--in-secs` from now. `--controller` names a controller. |
+| `deliver` | Provider: records `--result`, a 32-byte hex hash, before the deadline. |
+| `release` | Buyer: lets the provider claim `--amount` more, or everything left without it. |
+| `claim` | Provider: pulls everything released and not yet claimed to the job's `pay_to`. |
+| `return` | Provider: gives an open job up, so the buyer can refund at once. |
+| `refund` | Buyer: takes back everything never released to the job's `refund_to`. |
+| `show` | Prints the job's record and the lepta its account holds. |
+| `job-account` | Prints the job account for a buyer and job reference. |
+| `payout-address --owner <id> --out <file>` | Makes a fresh private payout address, see below. |
+
+Every command names the job with `--buyer` and `--job-ref` (64 hex characters), and each call prints the job's record once it lands. `--payer` pays a public call's fee from another wallet account.
+
+`payout-address` makes a fresh private address under one of your private accounts' keys, prints its id for `open`, and writes the file you pass as `--payee-address` when you claim or refund to it. Keep that file: its identifier is the only way to reach a fresh address, so the command never overwrites one. Once your wallet holds the address, the CLI uses it directly. For someone else's public account, pass `--public-payee`. Otherwise the CLI refuses a payout it can't place.
+
 ## Build and test
 
 You need Rust, Docker and the RISC Zero toolchain (`rzup install cargo-risczero 3.0.5`, `rzup install r0vm 3.0.5`, `rzup install rust`).
@@ -249,7 +260,7 @@ make test
 
 `make build` builds the guest in RISC Zero's Docker image `r0.1.91.1`, the one LEZ `v0.3.1` builds its own programs with, so the image id is reproducible. `methods/guest/Cargo.lock` is part of that identity too: change it and the image id changes. `make test` runs the program's rules as plain Rust, then the built binary through LEZ `v0.3.1`'s state machine with real signatures, transfers and deadlines. CI runs both, and fails when the build's image id isn't the deployed one above.
 
-`make build` also builds the example arbiter, from its own guest crate so the escrow's image id never depends on it. Next to the escrow it builds `test_controller.bin`, a test-only program that relays whatever escrow call it gets, so the tests can call the escrow from another program. It checks nothing, so never deploy it anywhere that matters.
+`make build` also builds the [example arbiter](examples/arbiter), from its own guest crate so the escrow's image id never depends on it. Next to the escrow it builds `test_controller.bin`, a test-only program that relays whatever escrow call it gets, so the tests can call the escrow from another program. It checks nothing, so never deploy it anywhere that matters.
 
 `cli/tests/devnet.rs` runs every flow on a local chain from [logos-devnet](https://github.com/drptbl/logos-devnet), through the CLI and the same LEZ wallet `lez_core` wraps, with public and private parties. CI runs it too:
 
@@ -257,22 +268,6 @@ make test
 make build && logos-devnet up
 logos-devnet exec -- cargo test -p logos_escrow_cli --test devnet -- --ignored
 ```
-
-`cli/` is a small client on the same wallet code `lez_core` uses. A call goes private when the signer is one of the wallet's private accounts or the payee is a private payout address:
-
-```bash
-export LEE_WALLET_HOME_DIR=~/.lez-escrow/wallet LOGOS_ESCROW_PROGRAM=<program id>
-cargo run -p logos_escrow_cli -- payout-address --owner <private account id> --out provider.addr
-cargo run -p logos_escrow_cli -- open --buyer <id> --job-ref <hex> --provider <id> --pay-to <id> --refund-to <id> --amount 1000000 --in-secs 3600
-cargo run -p logos_escrow_cli -- release --buyer <id> --job-ref <hex> --amount 250000
-cargo run -p logos_escrow_cli -- deliver --buyer <id> --job-ref <hex> --result <hex>
-cargo run -p logos_escrow_cli -- claim --buyer <id> --job-ref <hex> --payee-address provider.addr
-cargo run -p logos_escrow_cli -- show --buyer <id> --job-ref <hex>
-```
-
-`open --controller <program id>` names a controller. `release` without `--amount` releases everything left, `claim` takes everything released and not yet claimed, and `refund` everything never released.
-
-`payout-address` makes a fresh private address under one of your private accounts' keys, prints its id for `open`, and writes the file you pass as `--payee-address` when you claim or refund to it. Keep that file: its identifier is the only way to reach a fresh address, so the command never overwrites one. Once your wallet holds the address, the CLI uses it directly. For someone else's public account, pass `--public-payee`. Otherwise the CLI refuses a payout it can't place.
 
 ## License
 
