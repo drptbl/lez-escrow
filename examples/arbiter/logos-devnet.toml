@@ -1,0 +1,14 @@
+# A devnet of the example's own, on a free port, with the escrow and the arbiter deployed and three
+# funded accounts: the buyer, the provider and the judge. Build both first: `make build` at the repo
+# root.
+home = ".logos-devnet"
+
+[devnet]
+port = 0
+
+[programs]
+escrow = "../../methods/guest/target/riscv32im-risc0-zkvm-elf/docker/logos_escrow.bin"
+arbiter = "guest/target/riscv32im-risc0-zkvm-elf/docker/example_arbiter.bin"
+
+[accounts.parties]
+count = 3

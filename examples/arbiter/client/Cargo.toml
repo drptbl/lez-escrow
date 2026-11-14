@@ -1,0 +1,22 @@
+[package]
+name = "logos_escrow_arbiter_client"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+# Sends the example arbiter's calls from a LEZ wallet, for the walkthrough in ../README.md.
+[[bin]]
+name = "arbiter"
+path = "src/main.rs"
+
+[dependencies]
+logos_escrow_arbiter = { path = ".." }
+logos_escrow_core = { path = "../../../core" }
+lee_core.workspace = true
+borsh.workspace = true
+wallet = { git = "https://github.com/logos-blockchain/logos-execution-zone.git", tag = "v0.3.1" }
+anyhow = "1"
+clap = { version = "4", features = ["derive"] }
+hex = "0.4"
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }

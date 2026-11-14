@@ -25,7 +25,7 @@ Rules every call keeps:
 
 ## Build a controller program
 
-Start from [examples/arbiter](../../examples/arbiter/src/lib.rs) and its tests at the end of `integration/tests/flows.rs`. Then hold to these, which the README's Controllers section explains:
+Start from [examples/arbiter](../../examples/arbiter/README.md): what it does, a walkthrough on a devnet, and how to copy it into your project. Then hold to these, which the README's Controllers section explains:
 
 - Your program opens the job itself and names its own program id as `controller`. The escrow refuses a program that names anything else.
 - Your program alone may `Release` and `Return` without the parties. `Deliver`, `Claim` and `Refund` stay with the party they name, or with your program's PDA when you pass its `pda_seeds`.
