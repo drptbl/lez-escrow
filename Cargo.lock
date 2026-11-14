@@ -4939,6 +4939,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "logos_escrow_arbiter_client"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "borsh",
+ "clap",
+ "hex",
+ "lee_core",
+ "logos_escrow_arbiter",
+ "logos_escrow_core",
+ "tokio",
+ "wallet",
+]
+
+[[package]]
 name = "logos_escrow_cli"
 version = "0.1.0"
 dependencies = [
