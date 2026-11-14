@@ -16,6 +16,7 @@ use lee_core::{
     native_token::{Instruction as NativeInstruction, NATIVE_TOKEN_PROGRAM_ID, TransferError},
     program::PdaSeed,
 };
+use logos_escrow_arbiter::{ArbiterError, ArbiterInstruction, Decision, case_account_id};
 use logos_escrow_core::{Instruction, Job, JobState, job_account_id};
 
 const GUEST: &str = concat!(
@@ -27,9 +28,15 @@ const CONTROLLER_GUEST: &str = concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/../methods/guest/target/riscv32im-risc0-zkvm-elf/docker/test_controller.bin"
 );
+/// The example arbiter controller.
+const ARBITER_GUEST: &str = concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../examples/arbiter/guest/target/riscv32im-risc0-zkvm-elf/docker/example_arbiter.bin"
+);
 /// Where the test deploys the escrow program; on chain this is the header account.
 const PROGRAM: AccountId = AccountId::new([0xE5; 32]);
 const CONTROLLER: AccountId = AccountId::new([0xC0; 32]);
+const ARBITER: AccountId = AccountId::new([0xA7; 32]);
 const JOB_REF: [u8; 32] = [9; 32];
 const AMOUNT: Balance = 500;
 const START: Balance = 10_000;
@@ -90,7 +97,11 @@ impl Chain {
                 (provider().id, START),
                 (operator().id, START),
             ])
-            .with_named_programs([(PROGRAM, load(GUEST)), (CONTROLLER, load(CONTROLLER_GUEST))]);
+            .with_named_programs([
+                (PROGRAM, load(GUEST)),
+                (CONTROLLER, load(CONTROLLER_GUEST)),
+                (ARBITER, load(ARBITER_GUEST)),
+            ]);
         Self { state, block: 1 }
     }
 
@@ -139,6 +150,21 @@ impl Chain {
             borsh::to_vec(instruction).expect("instruction serializes"),
         );
         self.send(CONTROLLER, signer, selectors, &relay, timestamp)
+    }
+
+    /// One call to the example arbiter, signed by `signer`.
+    fn arbiter(
+        &mut self,
+        signer: &Party,
+        accounts: &[AccountId],
+        instruction: &ArbiterInstruction,
+        timestamp: u64,
+    ) -> Result<(), LeeError> {
+        let selectors = accounts
+            .iter()
+            .map(|id| ProgramShardSelector::new(*id, ARBITER))
+            .collect();
+        self.send(ARBITER, signer, selectors, instruction, timestamp)
     }
 
     fn send<I: borsh::BorshSerialize>(
@@ -599,4 +625,98 @@ fn a_controllers_own_account_opens_and_refunds_a_job_through_it() {
         .expect("the treasury refunds through the controller");
     assert_eq!(chain.balance(REFUND_TO), AMOUNT);
     assert_eq!(chain.balance(job), 0);
+}
+
+/// The buyer opens a job through the example arbiter, which records the operator as its judge.
+fn open_with_judge(chain: &mut Chain) {
+    let open = ArbiterInstruction::Open {
+        escrow: PROGRAM,
+        judge: operator().id,
+        job_ref: JOB_REF,
+        provider: provider().id,
+        pay_to: PAY_TO,
+        refund_to: REFUND_TO,
+        amount: AMOUNT,
+        deadline: DEADLINE,
+    };
+    chain
+        .arbiter(
+            &buyer(),
+            &[buyer().id, case_account_id(&ARBITER, &job()), job()],
+            &open,
+            BEFORE,
+        )
+        .expect("open through the arbiter");
+}
+
+fn decide(decision: Decision) -> ArbiterInstruction {
+    ArbiterInstruction::Decide {
+        escrow: PROGRAM,
+        decision,
+    }
+}
+
+#[test]
+fn the_arbiters_judge_pays_part_and_returns_the_rest() {
+    let mut chain = Chain::new();
+    open_with_judge(&mut chain);
+    assert_eq!(chain.job().controller, Some(ARBITER));
+    assert_eq!(chain.balance(job()), AMOUNT);
+
+    let case = case_account_id(&ARBITER, &job());
+    chain
+        .arbiter(
+            &operator(),
+            &[operator().id, case, buyer().id, job()],
+            &decide(Decision::Release {
+                job_ref: JOB_REF,
+                amount: 200,
+            }),
+            BEFORE,
+        )
+        .expect("the judge releases part");
+    chain
+        .arbiter(
+            &operator(),
+            &[operator().id, case, provider().id, job()],
+            &decide(Decision::Return),
+            BEFORE,
+        )
+        .expect("the judge returns the rest");
+    assert_eq!(chain.job().state, JobState::Returned);
+
+    chain.claim_of(200).expect("the provider claims its part");
+    let refund = Instruction::Refund {
+        job_ref: JOB_REF,
+        amount: AMOUNT - 200,
+        deadline: 0,
+    };
+    chain
+        .call(&buyer(), &[buyer().id, job(), REFUND_TO], &refund, BEFORE)
+        .expect("the buyer refunds the rest");
+    assert_eq!(chain.balance(PAY_TO), 200);
+    assert_eq!(chain.balance(REFUND_TO), AMOUNT - 200);
+}
+
+#[test]
+fn only_the_cases_judge_decides() {
+    let mut chain = Chain::new();
+    open_with_judge(&mut chain);
+    let case = case_account_id(&ARBITER, &job());
+
+    // The provider signs a decision in its own favour.
+    let result = chain.arbiter(
+        &provider(),
+        &[provider().id, case, buyer().id, job()],
+        &decide(Decision::Release {
+            job_ref: JOB_REF,
+            amount: AMOUNT,
+        }),
+        BEFORE,
+    );
+    assert!(
+        refused_with(ArbiterError::WrongJudge.code())(&result),
+        "{result:?}"
+    );
+    assert_eq!(chain.job().released, 0);
 }
