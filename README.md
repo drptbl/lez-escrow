@@ -4,6 +4,14 @@ Job escrow for the Logos Execution Zone. A buyer locks a payment for one job and
 
 Built for agent services in [logos-mcp](https://github.com/drptbl/logos-mcp), but any LEZ wallet can call it, and other programs can build on it: a job can name a controller program, such as a marketplace, a DAO or an arbiter, that decides what the provider gets. Testnet only: LEZ is not meant for real funds yet.
 
+## For agents
+
+The repo is also a Claude Code plugin with a `logos-escrow` skill, for agents that integrate the escrow: the order of calls, the rules integrations get wrong, writing a controller, and testing on a devnet. Install it with:
+
+```text
+/plugin install logos-escrow --marketplace drptbl/logos-escrow
+```
+
 ## Deployment
 
 | Network | Value |
@@ -218,6 +226,17 @@ LEZ itself refuses the rest. In a public call those cost more: the transaction i
 - `NativeTransferFailed`: an `Open` the buyer can't fund
 
 Check the deadline and the buyer's balance before you send.
+
+## On your own devnet
+
+To test your project against the escrow, deploy the released binary on a local [logos-devnet](https://github.com/drptbl/logos-devnet) chain. In your `logos-devnet.toml`:
+
+```toml
+[programs]
+escrow = { url = "https://github.com/drptbl/logos-escrow/releases/download/v0.2.0/logos_escrow.bin", sha256 = "53e5fd1ae615fa2e7f29f400ffa75923d9026985ebf11cc5bd958ec777d042c9" }
+```
+
+`logos-devnet up` deploys it and exports its program id as `LOGOS_PROGRAM_ESCROW`. Read that, and fall back to the testnet id above when it isn't set. It's the same image as on testnet, so instructions, records and errors behave the same, but the program id differs, and so does every job account derived from it.
 
 ## Build and test
 

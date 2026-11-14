@@ -1,0 +1,12 @@
+{
+  "name": "logos-escrow",
+  "description": "The logos-escrow skill for agents integrating the escrow on the Logos Execution Zone.",
+  "owner": { "name": "drptbl" },
+  "plugins": [
+    {
+      "name": "logos-escrow",
+      "source": "./",
+      "description": "Integrate the logos-escrow job escrow on the Logos Execution Zone: client calls, controller programs and devnet testing."
+    }
+  ]
+}
